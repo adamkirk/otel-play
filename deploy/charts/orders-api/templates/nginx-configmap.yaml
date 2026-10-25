@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "orders-api.fullname" . }}-nginx
+  labels:
+    {{- include "orders-api.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_tokens off;
+
+        # Laravel logs every request itself, as JSON.
+        access_log off;
+
+        # It's a JSON API with no static assets, so every request goes
+        # straight to the front controller and nginx needs none of the
+        # app's files.
+        location / {
+            include fastcgi_params;
+            fastcgi_pass 127.0.0.1:9000;
+            fastcgi_param SCRIPT_FILENAME /var/www/html/public/index.php;
+            fastcgi_param SCRIPT_NAME /index.php;
+            fastcgi_read_timeout 30s;
+        }
+    }

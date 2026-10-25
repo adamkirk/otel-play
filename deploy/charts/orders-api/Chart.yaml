@@ -1,0 +1,6 @@
+apiVersion: v2
+name: orders-api
+description: Laravel orders API (php-fpm + nginx) for the otel-play shop
+type: application
+version: 0.1.0
+appVersion: "dev"

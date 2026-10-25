@@ -37,7 +37,7 @@ browser ─OTLP/http─► web /api/otel (proxy) ─► otel-collector
 ## Repo layout
 
 - `catalogue-api/` — Go service and Dockerfile
-- `orders-api/` — Laravel app and Dockerfile, with two targets: `web` (nginx + fpm) and `worker` (queue:work)
+- `orders-api/` — Laravel app and Dockerfile. One image runs php-fpm by default and the queue worker with `queue:work` as its args; nginx is a sidecar
 - `web/` — Next.js app (TypeScript, app router) and Dockerfile
 - `deploy/k3d/` — cluster config
 - `deploy/charts/` — our own charts: `catalogue-api`, `orders-api` (web and worker Deployments, migrate Job), `web`, `mysql`, `redis`, `dashboards`
@@ -127,27 +127,35 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
   - reserve stock, delete the pod, and check the stock level survived
 
 ## Stage 3 — MySQL, Redis, orders-api (Laravel)
-- [ ] Helm charts `deploy/charts/mysql` (StatefulSet, PVC, Secret, official image) and `deploy/charts/redis` (Deployment, Service)
-- [ ] New Laravel app with an Order model, its migration, and the endpoints from the table above. HTTP client calls catalogue `/stock/reserve`
-- [ ] Logging: `LOG_CHANNEL=stderr` with the JSON formatter. Log each order created and each catalogue call
-- [ ] CORS config allowing `shop.localhost`
-- [ ] Dockerfile:
-  - php-fpm with `pecl install redis` (the `opentelemetry` extension comes in Part 2)
-  - nginx, via supervisord or a sidecar container
-  - a `worker` target
-- [ ] Helm chart `deploy/charts/orders-api`:
-  - web Deployment, Service, Ingress `orders.localhost`
-  - migration Job as a Helm `pre-install,pre-upgrade` hook
-  - shared ConfigMap/Secret for env (DB, Redis, catalogue URL)
-- [ ] Verify:
-  - `POST /api/orders` creates a row in MySQL and decrements stock in catalogue-api
-  - a job lands on the Redis queue
+- [x] Helm charts `deploy/charts/mysql` (StatefulSet, PVC, Secret, official `mysql:8.4` image) and `deploy/charts/redis` (Deployment, Service, `redis:7.4-alpine`, no persistence)
+- [x] New Laravel 13 app, created with the `composer:2` Docker image since there's no local PHP:
+  - `Order` and `OrderItem` models with their migration, plus an `OrderStatus` enum (pending, paid, failed, rejected, cancelled)
+  - the endpoints from the table above
+  - `CatalogueClient`, which prices each line with `GET /products/{id}` and then calls `/stock/reserve`
+- [x] `ProcessOrder` and `CancelOrder` job stubs so dispatching works. They only log for now, and the real logic comes in Stage 4
+- [x] Logging: `LOG_CHANNEL=stderr` with the JSON formatter. `LogRequest` middleware writes one line per request (skipping `/up`). Logs cover order created, rejected and queued, plus each catalogue reservation
+- [x] CORS config allowing origins from `CORS_ALLOWED_ORIGINS` (default `http://shop.localhost`)
+- [x] Feature tests (`make test-orders`, run in Docker): create, rejected, unknown product, catalogue outage, show/list, cancel, CORS
+- [x] Dockerfile:
+  - `php:8.4-fpm` with `pdo_mysql`, `redis`, `opcache`, `pcntl` via `install-php-extensions`; the `opentelemetry` extension comes in Part 2
+  - fpm config sets `clear_env = no` so the pod's env reaches PHP, and turns off fpm's own access log
+  - the entrypoint runs `php artisan optimize` at start-up
+  - a single image for the API and the worker; nginx is a sidecar (`nginx-unprivileged`) that sends every request to `index.php`
+- [x] Helm chart `deploy/charts/orders-api`:
+  - web Deployment (php + nginx containers), Service, Ingress `orders.localhost`
+  - migration Job as a Helm `pre-install,pre-upgrade` hook. Its env comes only from values and the mysql chart's Secret, since the hook runs before this chart's own resources exist
+  - an `APP_KEY` Secret, generated once and kept across upgrades with `lookup`
+- [x] Make targets: `deploy-mysql`, `deploy-redis`, `build-orders`, `import-orders`, `deploy-orders`, `test-orders`
+- [x] Verify:
+  - `POST /api/orders` creates rows in MySQL and decrements stock in catalogue-api
+  - an order that can't be reserved returns 409 with status `rejected`; an unknown product returns 422
+  - jobs land on the Redis queue (`orders-api-database-queues:default`)
   - `kubectl logs` shows JSON logs from both services
 
 ## Stage 4 — orders-worker
 - [ ] `ProcessOrder`, `CancelOrder` and `SendConfirmation` jobs, with the fake payment and ~10% failures that get retried
 - [ ] Log job start, end and failure with the order ID, job name and attempt number
-- [ ] Worker Deployment in the `orders-api` chart (`worker.enabled`, `worker.replicas`), using the `worker` image target
+- [ ] Worker Deployment in the `orders-api` chart (`worker.enabled`, `worker.replicas`), using the same image with `args: [php, artisan, queue:work, ...]`. Use `args` rather than `command`, so the entrypoint's `optimize` still runs
 - [ ] Verify: an order moves from pending to paid or failed, and the worker logs show retries
 
 ## Stage 5 — web (Next.js)
@@ -201,7 +209,7 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 - [ ] Verify: curl the endpoints, see spans and metrics in Grafana and Honeycomb
 
 ## Stage 11 — Instrument orders-api + worker
-- [ ] Add the `opentelemetry` PECL extension to the Dockerfile and `OTEL_PHP_AUTOLOAD_ENABLED=true`
+- [ ] Add the `opentelemetry` extension to the Dockerfile (`install-php-extensions opentelemetry`) and `OTEL_PHP_AUTOLOAD_ENABLED=true`
 - [ ] Composer packages: `open-telemetry/sdk`, `open-telemetry/exporter-otlp`, `open-telemetry/opentelemetry-auto-laravel`, `open-telemetry/opentelemetry-auto-guzzle` (or psr18)
 - [ ] Custom metrics through a small `Telemetry` service (Meter from `Globals`), with delta temporality
 - [ ] Add `traceparent`/`tracestate` to the allowed CORS headers

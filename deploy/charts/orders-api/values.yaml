@@ -1,0 +1,64 @@
+image:
+  repository: otel-play/orders-api
+  tag: dev
+  # Images are loaded into k3d with `k3d image import`, never pulled.
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+app:
+  env: production
+  debug: false
+  logLevel: info
+  catalogueUrl: http://catalogue-api
+  # Comma-separated list of browser origins allowed to call the API.
+  corsAllowedOrigins: http://shop.localhost
+
+database:
+  host: mysql
+  port: 3306
+  name: shop
+  username: shop
+  # Secret created by the mysql chart.
+  passwordSecret:
+    name: mysql
+    key: password
+
+redis:
+  host: redis
+  port: 6379
+
+# Extra environment variables for every container running the app image
+# (web, worker and migrations), as a name -> value map.
+env: {}
+
+# `make deploy-orders` sets a timestamp here so a re-imported image with the
+# same tag still rolls the pods.
+podAnnotations: {}
+
+migrations:
+  enabled: true
+
+nginx:
+  image:
+    repository: nginxinc/nginx-unprivileged
+    tag: 1.27-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 5m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+
+ingress:
+  enabled: true
+  className: traefik
+  host: orders.localhost
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi
+  limits:
+    memory: 384Mi

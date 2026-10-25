@@ -1,0 +1,23 @@
+image:
+  repository: mysql
+  tag: "8.4"
+  pullPolicy: IfNotPresent
+
+# Demo credentials. The Secret is created from these values.
+auth:
+  rootPassword: root-password
+  database: shop
+  username: shop
+  password: shop-password
+
+persistence:
+  size: 1Gi
+  # Empty uses the cluster default (local-path on k3d).
+  storageClass: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    memory: 768Mi

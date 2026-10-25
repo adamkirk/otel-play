@@ -15,8 +15,8 @@ APP_NAMESPACE  ?= shop
 
 IMAGE_TAG      ?= dev
 CATALOGUE_IMAGE ?= otel-play/catalogue-api:$(IMAGE_TAG)
+# Also runs the queue worker, with a different command.
 ORDERS_IMAGE    ?= otel-play/orders-api:$(IMAGE_TAG)
-WORKER_IMAGE    ?= otel-play/orders-worker:$(IMAGE_TAG)
 WEB_IMAGE       ?= otel-play/web:$(IMAGE_TAG)
 
 REQUIRED_TOOLS := docker k3d kubectl helm k6
@@ -57,7 +57,6 @@ config: ## Print resolved configuration
 	@echo "APP_NAMESPACE   = $(APP_NAMESPACE)"
 	@echo "CATALOGUE_IMAGE = $(CATALOGUE_IMAGE)"
 	@echo "ORDERS_IMAGE    = $(ORDERS_IMAGE)"
-	@echo "WORKER_IMAGE    = $(WORKER_IMAGE)"
 	@echo "WEB_IMAGE       = $(WEB_IMAGE)"
 	@echo "HONEYCOMB_API_KEY set: $(if $(HONEYCOMB_API_KEY),yes,no)"
 
@@ -105,3 +104,34 @@ deploy-catalogue: ## Install/upgrade the catalogue-api chart
 		--set image.tag=$(IMAGE_TAG) \
 		--set-string podAnnotations.rollme=$(shell date +%s) \
 		--wait
+
+# ---- Data stores ----------------------------------------------------------------
+.PHONY: deploy-mysql
+deploy-mysql: ## Install/upgrade the MySQL chart
+	$(HELM) upgrade --install mysql deploy/charts/mysql --namespace $(APP_NAMESPACE) --wait
+
+.PHONY: deploy-redis
+deploy-redis: ## Install/upgrade the Redis chart
+	$(HELM) upgrade --install redis deploy/charts/redis --namespace $(APP_NAMESPACE) --wait
+
+# ---- orders-api -------------------------------------------------------------------
+.PHONY: build-orders
+build-orders: ## Build the orders-api image (API and worker)
+	docker build -t $(ORDERS_IMAGE) orders-api
+
+.PHONY: import-orders
+import-orders: ## Import the orders-api image into k3d
+	k3d image import -c $(CLUSTER_NAME) $(ORDERS_IMAGE)
+
+.PHONY: deploy-orders
+deploy-orders: ## Install/upgrade the orders-api chart (runs migrations first)
+	$(HELM) upgrade --install orders-api deploy/charts/orders-api \
+		--namespace $(APP_NAMESPACE) \
+		--set image.repository=$(firstword $(subst :, ,$(ORDERS_IMAGE))) \
+		--set image.tag=$(IMAGE_TAG) \
+		--set-string podAnnotations.rollme=$(shell date +%s) \
+		--wait
+
+.PHONY: test-orders
+test-orders: ## Run the orders-api test suite (in Docker, no local PHP needed)
+	docker run --rm -v "$(CURDIR)/orders-api":/app -w /app composer:2 php artisan test

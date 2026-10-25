@@ -1,0 +1,37 @@
+{{- if .Values.migrations.enabled }}
+# Runs before every install/upgrade, so the schema is in place before new
+# pods start. If it fails, the release fails and the old pods keep running.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "orders-api.fullname" . }}-migrate
+  labels:
+    {{- include "orders-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "orders-api.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+      containers:
+        - name: migrate
+          image: {{ include "orders-api.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["php", "artisan", "migrate", "--force", "--isolated"]
+          env:
+            {{- include "orders-api.env" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+{{- end }}
