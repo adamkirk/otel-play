@@ -8,6 +8,8 @@ export
 # ---- Config -----------------------------------------------------------------
 CLUSTER_NAME   ?= otel-play
 KUBE_CONTEXT   ?= k3d-$(CLUSTER_NAME)
+K3D_CONFIG     ?= deploy/k3d/cluster.yaml
+HTTP_PORT      ?= 80
 OBS_NAMESPACE  ?= observability
 APP_NAMESPACE  ?= shop
 
@@ -50,6 +52,7 @@ check-deps: ## Check required CLI tools are installed
 config: ## Print resolved configuration
 	@echo "CLUSTER_NAME    = $(CLUSTER_NAME)"
 	@echo "KUBE_CONTEXT    = $(KUBE_CONTEXT)"
+	@echo "HTTP_PORT       = $(HTTP_PORT)"
 	@echo "OBS_NAMESPACE   = $(OBS_NAMESPACE)"
 	@echo "APP_NAMESPACE   = $(APP_NAMESPACE)"
 	@echo "CATALOGUE_IMAGE = $(CATALOGUE_IMAGE)"
@@ -57,3 +60,30 @@ config: ## Print resolved configuration
 	@echo "WORKER_IMAGE    = $(WORKER_IMAGE)"
 	@echo "WEB_IMAGE       = $(WEB_IMAGE)"
 	@echo "HONEYCOMB_API_KEY set: $(if $(HONEYCOMB_API_KEY),yes,no)"
+
+# ---- Cluster ----------------------------------------------------------------
+.PHONY: cluster-up
+cluster-up: ## Create the k3d cluster (idempotent) and namespaces
+	@if k3d cluster get $(CLUSTER_NAME) >/dev/null 2>&1; then \
+		echo "Cluster $(CLUSTER_NAME) already exists"; \
+	else \
+		k3d cluster create $(CLUSTER_NAME) --config $(K3D_CONFIG) \
+			--port "$(HTTP_PORT):80@loadbalancer"; \
+	fi
+	@$(MAKE) --no-print-directory namespaces
+
+.PHONY: cluster-down
+cluster-down: ## Delete the k3d cluster
+	k3d cluster delete $(CLUSTER_NAME)
+
+.PHONY: namespaces
+namespaces: ## Create the observability and app namespaces
+	@for ns in $(OBS_NAMESPACE) $(APP_NAMESPACE); do \
+		$(KUBECTL) create namespace $$ns --dry-run=client -o yaml | $(KUBECTL) apply -f -; \
+	done
+
+.PHONY: cluster-status
+cluster-status: ## Show nodes, namespaces and Traefik status
+	$(KUBECTL) get nodes -o wide
+	$(KUBECTL) get namespaces
+	$(KUBECTL) -n kube-system get deploy traefik

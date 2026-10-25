@@ -93,9 +93,9 @@ browser ─OTLP/http─► web /api/otel (proxy) ─► otel-collector
 - [x] Makefile skeleton: `help`, `check-deps` (docker, k3d, kubectl, helm, k6), `config`, config vars (`CLUSTER_NAME`, `KUBE_CONTEXT`, namespaces, image names and tags)
 
 ## Stage 1 — Cluster
-- [ ] `make cluster-up`: k3d cluster with `-p "80:80@loadbalancer"`, 1 server and 2 agents. `make cluster-down` deletes it
-- [ ] Namespaces: `observability`, `shop`
-- [ ] Verify: `kubectl get nodes` lists the nodes and Traefik responds on localhost:80
+- [x] `make cluster-up`: k3d cluster from `deploy/k3d/cluster.yaml` (1 server, 2 agents), with `--port "$(HTTP_PORT):80@loadbalancer"` (default 80). Safe to re-run. `make cluster-down` deletes it
+- [x] Namespaces: `observability`, `shop` (`make namespaces`, also run by `cluster-up`)
+- [x] Verify: `make cluster-status` shows 3 Ready nodes and Traefik 1/1, and `curl -H "Host: test.localhost" localhost` returns Traefik's 404
 
 ## Stage 2 — Grafana stack (Helm)
 - [ ] `make helm-repos` (grafana, open-telemetry)

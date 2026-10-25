@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/k3d-io/k3d/main/pkg/config/v1alpha5/schema.json
+# k3d cluster definition. The Makefile sets the cluster name and maps the
+# host HTTP port to the loadbalancer, where Traefik (bundled with k3s) serves
+# all *.localhost ingresses.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: otel-play
+servers: 1
+agents: 2
+options:
+  k3d:
+    wait: true
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true
