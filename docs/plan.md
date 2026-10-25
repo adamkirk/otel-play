@@ -89,8 +89,8 @@ browser ─OTLP/http─► web /api/otel (proxy) ─► otel-collector
 ---
 
 ## Stage 0 — Scaffolding
-- [ ] Create the directory layout, `.gitignore`, and `.env.example` with `HONEYCOMB_API_KEY` and an optional `HONEYCOMB_DATASET`
-- [ ] Makefile skeleton: `help`, `check-deps` (docker, k3d, kubectl, helm, k6), config vars (`CLUSTER_NAME`, image tags)
+- [x] Create the directory layout, `.gitignore`, and `.env.example` with `HONEYCOMB_API_KEY` and an optional `HONEYCOMB_DATASET`. The app dirs (`catalogue-api/`, `orders-api/`, `web/`) are created in their own stages, because `composer create-project` and `create-next-app` need an empty target dir
+- [x] Makefile skeleton: `help`, `check-deps` (docker, k3d, kubectl, helm, k6), `config`, config vars (`CLUSTER_NAME`, `KUBE_CONTEXT`, namespaces, image names and tags)
 
 ## Stage 1 — Cluster
 - [ ] `make cluster-up`: k3d cluster with `-p "80:80@loadbalancer"`, 1 server and 2 agents. `make cluster-down` deletes it

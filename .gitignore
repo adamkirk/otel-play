@@ -1,0 +1,29 @@
+# Secrets
+.env
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Go
+catalogue-api/bin/
+
+# Laravel
+orders-api/vendor/
+orders-api/.env
+orders-api/storage/*.key
+orders-api/node_modules/
+
+# Next.js
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+
+# Helm
+deploy/charts/*/charts/
+deploy/charts/*/Chart.lock
+
+# k6
+loadgen/results/
