@@ -334,7 +334,26 @@ One signal at a time, checking Grafana and Honeycomb after each step.
   - Catalogue: latency, cache hit ratio, stock gauge, chaos errors
   - Queue: jobs processed/failed, duration, queue wait
 
-## Stage 15 — Final wiring & docs
+## Stage 15 — Edge observability (optional)
+Logging policy: **edge access logs** (closest to the user) cover basic traffic/error/latency monitoring, and **app telemetry over OTLP** (spans + app logs) covers the rest.
+
+- [ ] **Traefik** (k3s's bundled ingress, configured with a `HelmChartConfig`):
+  - JSON access logs, dropping health checks and other noise
+  - OTLP **metrics** to the collector: request rate/errors/duration per router and service, for dashboards and alerts
+  - OTLP **tracing**, so the root span starts at the ingress and its trace ID is written into the access log. Edge log → app spans → app logs then share one trace ID
+- [ ] **nginx** (orders-api sidecar): keep the **error log** (php-fpm upstream failures, `max_children` saturation). Optionally re-enable a JSON access log with `$upstream_status` / `$upstream_response_time`. Traefik stays the record of user traffic, so dashboards don't count orders-api requests twice
+- [ ] **Agent:** a second collector release, `otel-collector-agent`, in `daemonset` mode with the chart's `logsCollection` preset (`filelog` + `hostPath`):
+  - include paths limited to traefik, nginx, mysql and redis, so instrumented apps aren't duplicated
+  - container + JSON parsers and k8s metadata
+  - OTLP → the existing gateway collector
+- [ ] Routing: edge logs go to **Loki only** by default (volume and per-event cost), with a switch to also send them to Honeycomb
+- [ ] Instrumented apps: per-request `request` log lines go to **stdout only** (not OTLP), since server spans already carry method/route/status/duration
+- [ ] Verify:
+  - a 502 during an orders-api rollout appears in Traefik logs and metrics even though the app saw nothing
+  - a Traefik log line's trace ID opens the full ingress → app trace
+  - no duplicate log lines for instrumented services
+
+## Stage 16 — Final wiring & docs
 - [ ] `make up`: cluster → observability → collector → build → import → deploy. `make down` deletes everything
 - [ ] README: prerequisites, `cp .env.example .env`, `make up`, URLs, demo walkthrough, and how Part 1 → Part 2 shows adding OTel to an existing system
 
