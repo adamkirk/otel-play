@@ -14,5 +14,3 @@ storage/framework/views/*
 bootstrap/cache/*.php
 Dockerfile
 .dockerignore
-AGENTS.md
-CLAUDE.md
