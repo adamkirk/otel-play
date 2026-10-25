@@ -1,0 +1,126 @@
+# open-telemetry/opentelemetry-collector — the one OTLP endpoint the apps send
+# to. It enriches everything with Kubernetes metadata and sends the same data
+# two ways:
+#
+#   -> Alloy      (and on to Tempo / Prometheus / Loki / Grafana)
+#   -> Honeycomb  (OTLP gRPC, keyed by the `honeycomb` Secret from `make secrets`)
+#
+# Apps use: OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability.svc:4317 (gRPC)
+#                                   or http://otel-collector.observability.svc:4318 (HTTP)
+mode: deployment
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+# Releases are named otel-collector, not otel-collector-opentelemetry-collector.
+fullnameOverride: otel-collector
+
+presets:
+  # Configures the k8s_attributes processor (and the RBAC it needs), which
+  # tags signals with k8s.pod.name, k8s.namespace.name, k8s.deployment.name,
+  # ... It's listed explicitly in each pipeline below, after memory_limiter.
+  kubernetesAttributes:
+    enabled: true
+
+extraEnvs:
+  - name: HONEYCOMB_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: honeycomb
+        key: api-key
+  - name: HONEYCOMB_API_ENDPOINT
+    valueFrom:
+      secretKeyRef:
+        name: honeycomb
+        key: api-endpoint
+  - name: HONEYCOMB_METRICS_DATASET
+    valueFrom:
+      secretKeyRef:
+        name: honeycomb
+        key: metrics-dataset
+
+# Only OTLP in.
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    # memory_limiter works off 80% of this.
+    memory: 512Mi
+
+config:
+  receivers:
+    # Drop the chart's default extra receivers.
+    jaeger: null
+    zipkin: null
+    prometheus: null
+    otlp:
+      protocols:
+        grpc:
+          endpoint: ${env:MY_POD_IP}:4317
+        http:
+          endpoint: ${env:MY_POD_IP}:4318
+
+  processors:
+    resource:
+      attributes:
+        - key: deployment.environment.name
+          value: k3d
+          action: insert
+    # PHP (php-fpm) exports delta metrics, since each request is a new process.
+    # Prometheus only stores cumulative series, so convert on that path only.
+    # Honeycomb takes delta as is.
+    delta_to_cumulative: {}
+
+  exporters:
+    debug: null
+
+    otlp_grpc/alloy:
+      endpoint: alloy.observability.svc:4317
+      tls:
+        insecure: true
+
+    otlp_grpc/honeycomb:
+      endpoint: ${env:HONEYCOMB_API_ENDPOINT}
+      headers:
+        x-honeycomb-team: ${env:HONEYCOMB_API_KEY}
+
+    # Honeycomb needs a dataset name for metrics. Traces and logs land in a
+    # dataset per service.name.
+    otlp_grpc/honeycomb-metrics:
+      endpoint: ${env:HONEYCOMB_API_ENDPOINT}
+      headers:
+        x-honeycomb-team: ${env:HONEYCOMB_API_KEY}
+        x-honeycomb-dataset: ${env:HONEYCOMB_METRICS_DATASET}
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, resource, batch]
+        exporters: [otlp_grpc/alloy, otlp_grpc/honeycomb]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, resource, batch]
+        exporters: [otlp_grpc/alloy, otlp_grpc/honeycomb]
+      # Two metrics pipelines, so delta -> cumulative only applies on the way
+      # to Prometheus.
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, resource, batch]
+        exporters: [otlp_grpc/honeycomb-metrics]
+      metrics/grafana:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, resource, delta_to_cumulative, batch]
+        exporters: [otlp_grpc/alloy]

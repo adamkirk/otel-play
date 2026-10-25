@@ -210,26 +210,57 @@ alloy_CHART := grafana/alloy
 alloy_VERSION := 1.14.3
 grafana_CHART := grafana-community/grafana
 grafana_VERSION := 14.0.1
+otel-collector_CHART := open-telemetry/opentelemetry-collector
+otel-collector_VERSION := 0.177.0
 
-# Backends first, then Alloy (which sends to them), then Grafana (which reads them).
-OBSERVABILITY := prometheus loki tempo alloy grafana
+# Backends first, then Alloy (which sends to them), the OTel Collector (which
+# sends to Alloy and Honeycomb), and Grafana (which reads the backends).
+OBSERVABILITY := prometheus loki tempo alloy otel-collector grafana
+
+HONEYCOMB_API_ENDPOINT    ?= api.honeycomb.io:443
+HONEYCOMB_METRICS_DATASET ?= otel-play-metrics
 
 .PHONY: helm-repos
 helm-repos: ## Add/update the third-party Helm repos
 	@for r in $(HELM_REPOS); do helm repo add --force-update $${r%%=*} $${r#*=} >/dev/null; done
 	helm repo update $(foreach r,$(HELM_REPOS),$(firstword $(subst =, ,$(r))))
 
-install-%: ## Install/upgrade one observability chart: install-loki | install-grafana | ...
+install-%: ## Install/upgrade one observability chart: install-loki | install-otel-collector | ...
 	$(if $(filter $*,$(OBSERVABILITY)),,$(error Unknown observability chart "$*". Choose from: $(OBSERVABILITY)))
 	$(HELM) upgrade --install $* $($*_CHART) --version $($*_VERSION) \
 		--namespace $(OBS_NAMESPACE) -f deploy/helm/$*.yaml --wait --timeout 5m
 
+.PHONY: secrets
+# The key is read from the shell environment ($$HONEYCOMB_API_KEY, exported from
+# .env above) rather than expanded by make, so it never shows up in `make -n`
+# output or make's command echo.
+secrets: ## Create/update the honeycomb Secret from .env (HONEYCOMB_API_KEY)
+	@test -n "$$HONEYCOMB_API_KEY" || { echo "HONEYCOMB_API_KEY is not set. cp .env.example .env and add your key."; exit 1; }
+	@$(KUBECTL) -n $(OBS_NAMESPACE) create secret generic honeycomb \
+		--from-literal=api-key="$$HONEYCOMB_API_KEY" \
+		--from-literal=api-endpoint="$(HONEYCOMB_API_ENDPOINT)" \
+		--from-literal=metrics-dataset="$(HONEYCOMB_METRICS_DATASET)" \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+
 .PHONY: observability-up
-observability-up: helm-repos ## Install the Grafana stack: Prometheus, Loki, Tempo, Alloy, Grafana
+observability-up: helm-repos secrets ## Install the Grafana stack, the OTel Collector and the Honeycomb Secret
 	@for c in $(OBSERVABILITY); do $(MAKE) --no-print-directory install-$$c || exit 1; done
 	@echo ""
 	@echo "  Grafana: http://grafana.localhost$(PORT_SUFFIX)  (anonymous admin; or admin/admin)"
 	@echo ""
+
+TELEMETRYGEN_IMAGE := ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.163.0
+
+.PHONY: smoke-telemetry
+smoke-telemetry: ## Send test traces, metrics and logs through the OTel Collector (service.name=otel-smoke-test)
+	@for signal in traces metrics logs; do \
+		echo "Sending $$signal..."; \
+		$(KUBECTL) -n $(OBS_NAMESPACE) run telemetrygen-$$signal --rm -i --restart=Never --quiet \
+			--image=$(TELEMETRYGEN_IMAGE) -- $$signal \
+			--otlp-endpoint=otel-collector.$(OBS_NAMESPACE).svc:4317 --otlp-insecure \
+			--service=otel-smoke-test --duration=5s --rate=5 >/dev/null 2>&1 || exit 1; \
+	done
+	@echo "Done. Look for service otel-smoke-test in Grafana (Explore) and Honeycomb."
 
 .PHONY: observability-status
 observability-status: ## Show the Grafana stack's pods

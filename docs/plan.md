@@ -241,12 +241,21 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
   - Tempo's `traces_spanmetrics_*` series appear in Prometheus
 
 ## Stage 9 — OTel Collector + Honeycomb
-- [ ] `make secrets` creates the `honeycomb` Secret from `.env`
-- [ ] Install the opentelemetry-collector chart (contrib image, deployment mode):
-  - Receivers: otlp grpc and http
-  - Processors: memory_limiter, k8sattributes, resource, deltatocumulative (on the metrics→alloy pipeline only, since Prometheus needs cumulative), batch
-  - Exporters: `otlp/alloy`, `otlphttp/honeycomb`
-- [ ] Verify with a `telemetrygen` Job (`make smoke-telemetry`): traces appear in both Tempo and Honeycomb
+- [x] `make secrets` creates the `honeycomb` Secret from `.env`: `HONEYCOMB_API_KEY`, plus `HONEYCOMB_API_ENDPOINT` (default `api.honeycomb.io:443`; EU accounts use `api.eu1.honeycomb.io:443`) and `HONEYCOMB_METRICS_DATASET` (default `otel-play-metrics`). The key is read from the shell environment, never expanded by make, so `make -n` can't print it
+- [x] `open-telemetry/opentelemetry-collector` 0.177.0 (collector-contrib 0.163.2), installed by `make install-otel-collector` and part of `make observability-up`:
+  - `deploy/helm/otel-collector.yaml`: a Deployment named `otel-collector`, OTLP only (the chart's Jaeger/Zipkin/self-scrape receivers removed with `null`)
+  - the `kubernetesAttributes` preset adds RBAC and config, and `k8s_attributes` is listed explicitly after `memory_limiter` in every pipeline (the preset only injects into pipelines named exactly traces/metrics/logs)
+  - the `resource` processor adds `deployment.environment.name=k3d`
+  - exporters `otlp_grpc/alloy`, `otlp_grpc/honeycomb`, and `otlp_grpc/honeycomb-metrics` (Honeycomb needs `x-honeycomb-dataset` for metrics; traces and logs get one dataset per `service.name`)
+  - two metrics pipelines, so `delta_to_cumulative` only runs on the Prometheus path
+  - uses the collector's current component names (`otlp_grpc`, `k8s_attributes`, `delta_to_cumulative`), matching what the chart rewrites to
+  - config checked with `otelcol-contrib validate`
+- [x] `make smoke-telemetry`: `telemetrygen` traces, metrics and logs sent to `otel-collector.observability.svc:4317` as `service.name=otel-smoke-test`
+- [x] Verify:
+  - 14 traces in Tempo with k8s resource attributes, 26 log lines in Loki, and the `gen` metric in Prometheus with promoted labels
+  - the collector's `otelcol_exporter_sent_*` counters match for Alloy and Honeycomb, with no `send_failed`
+  - Prometheus sets `job="<service.namespace>/<service.name>"`, and k8s_attributes fills `service.namespace` from the k8s namespace, so query by `service_name` or `job=~".*/<name>"`
+- App endpoint for Part 2: `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability.svc:4317` (gRPC) or `:4318` (HTTP)
 
 ## Stage 10 — Instrument catalogue-api
 - [ ] OTel SDK setup: resource, OTLP gRPC exporters for traces and metrics, wrap the mux with `otelhttp`
