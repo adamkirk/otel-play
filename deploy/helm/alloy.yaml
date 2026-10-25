@@ -1,0 +1,81 @@
+# grafana/alloy — receives OTLP (from the OTel Collector) and routes each
+# signal to its Grafana-stack backend:
+#
+#   traces  -> Tempo       (OTLP gRPC)
+#   metrics -> Prometheus  (OTLP HTTP, /api/v1/otlp)
+#   logs    -> Loki        (OTLP HTTP, /otlp)
+#
+# Its UI shows this pipeline live: `make alloy-ui`.
+controller:
+  # One gateway instance, rather than the chart's default per-node DaemonSet.
+  type: deployment
+  replicas: 1
+
+alloy:
+  enableReporting: false
+
+  extraPorts:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+      appProtocol: grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  configMap:
+    content: |
+      otelcol.receiver.otlp "default" {
+        grpc {
+          endpoint = "0.0.0.0:4317"
+        }
+        http {
+          endpoint = "0.0.0.0:4318"
+        }
+
+        output {
+          traces  = [otelcol.processor.batch.default.input]
+          metrics = [otelcol.processor.batch.default.input]
+          logs    = [otelcol.processor.batch.default.input]
+        }
+      }
+
+      otelcol.processor.batch "default" {
+        output {
+          traces  = [otelcol.exporter.otlp.tempo.input]
+          metrics = [otelcol.exporter.otlphttp.prometheus.input]
+          logs    = [otelcol.exporter.otlphttp.loki.input]
+        }
+      }
+
+      otelcol.exporter.otlp "tempo" {
+        client {
+          endpoint = "tempo.observability.svc:4317"
+          tls {
+            insecure = true
+          }
+        }
+      }
+
+      // otlphttp appends /v1/metrics, giving Prometheus's /api/v1/otlp/v1/metrics.
+      otelcol.exporter.otlphttp "prometheus" {
+        client {
+          endpoint = "http://prometheus-server.observability.svc/api/v1/otlp"
+        }
+      }
+
+      // otlphttp appends /v1/logs, giving Loki's /otlp/v1/logs.
+      otelcol.exporter.otlphttp "loki" {
+        client {
+          endpoint = "http://loki.observability.svc:3100/otlp"
+        }
+      }

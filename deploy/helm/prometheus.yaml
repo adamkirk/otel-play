@@ -1,0 +1,51 @@
+# prometheus-community/prometheus — the Prometheus server only. Metrics arrive
+# over OTLP (from Alloy) at /api/v1/otlp/v1/metrics, and Tempo's metrics
+# generator remote-writes span metrics to /api/v1/write.
+server:
+  extraFlags:
+    - web.enable-lifecycle
+    - web.enable-otlp-receiver
+    - web.enable-remote-write-receiver
+    # Lets metrics link to example traces in Grafana.
+    - enable-feature=exemplar-storage
+
+  global:
+    scrape_interval: 30s
+    evaluation_interval: 30s
+
+  otlp:
+    # Copy these OTLP resource attributes onto every series as labels, so
+    # queries can filter by them without joining target_info.
+    promote_resource_attributes:
+      - service.namespace
+      - service.version
+      - deployment.environment.name
+      - k8s.namespace.name
+      - k8s.pod.name
+      - k8s.deployment.name
+    keep_identifying_resource_attributes: true
+
+  tsdb:
+    # OTLP pushes can arrive slightly out of order (batching, retries).
+    out_of_order_time_window: 30m
+
+  retention: 3d
+  persistentVolume:
+    size: 5Gi
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# The chart bundles these by default; this demo only needs the server.
+alertmanager:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false

@@ -1,0 +1,101 @@
+# grafana-community/grafana — at http://grafana.localhost, with the Prometheus,
+# Loki and Tempo datasources provisioned and linked to each other.
+adminUser: admin
+adminPassword: admin
+
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  hosts:
+    - grafana.localhost
+
+grafana.ini:
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+  # Local demo: browse without logging in. Sign in as admin/admin to edit.
+  auth.anonymous:
+    enabled: true
+    org_role: Admin
+  server:
+    root_url: http://grafana.localhost
+
+# Dashboards come from ConfigMaps labelled grafana_dashboard=1, in any
+# namespace (deploy/charts/dashboards).
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    labelValue: "1"
+    searchNamespace: ALL
+    folderAnnotation: grafana_folder
+    provider:
+      foldersFromFilesStructure: true
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        url: http://prometheus-server.observability.svc
+        isDefault: true
+        jsonData:
+          # Exemplars on metrics link to their traces in Tempo.
+          exemplarTraceIdDestinations:
+            - name: trace_id
+              datasourceUid: tempo
+
+      - name: Loki
+        uid: loki
+        type: loki
+        url: http://loki.observability.svc:3100
+        jsonData:
+          # OTLP logs carry trace_id as structured metadata; link it to Tempo.
+          derivedFields:
+            - name: Trace
+              matcherType: label
+              matcherRegex: trace_id
+              url: "$${__value.raw}"
+              datasourceUid: tempo
+              urlDisplayLabel: View trace
+
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        url: http://tempo.observability.svc:3200
+        jsonData:
+          # From a span, jump to that service's logs around the same time...
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: -5m
+            spanEndTimeShift: 5m
+            filterByTraceID: true
+            tags:
+              - key: service.name
+                value: service_name
+          # ...or to its RED metrics from Tempo's metrics generator.
+          tracesToMetrics:
+            datasourceUid: prometheus
+            spanStartTimeShift: -5m
+            spanEndTimeShift: 5m
+            tags:
+              - key: service.name
+                value: service
+          serviceMap:
+            datasourceUid: prometheus
+          nodeGraph:
+            enabled: true
+          search:
+            hide: false
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+testFramework:
+  enabled: false

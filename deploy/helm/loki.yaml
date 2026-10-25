@@ -1,0 +1,61 @@
+# grafana-community/loki — a single Loki process with local filesystem
+# storage. Logs arrive over OTLP (from Alloy) at /otlp/v1/logs.
+deploymentMode: Monolithic
+
+loki:
+  # Single tenant: no X-Scope-OrgID header needed.
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    # OTLP resource/log attributes that aren't labels are kept as structured
+    # metadata (trace_id, span_id, ...), which needs tsdb + schema v13.
+    allow_structured_metadata: true
+    # Used by Grafana's Logs Drilldown app.
+    volume_enabled: true
+    retention_period: 72h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  pattern_ingester:
+    enabled: true
+
+singleBinary:
+  replicas: 1
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# Everything else is for scaled-out installs or self-tests.
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0

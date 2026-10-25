@@ -192,6 +192,53 @@ open: ## Print the shop's URLs
 	@echo "  Catalogue API: http://catalogue.localhost$(PORT_SUFFIX)/products"
 	@echo ""
 
+# ---- Observability (Grafana stack) -------------------------------------------------
+# Third-party charts, pinned. Values live in deploy/helm/<release>.yaml.
+HELM_REPOS := \
+	grafana=https://grafana.github.io/helm-charts \
+	grafana-community=https://grafana-community.github.io/helm-charts \
+	prometheus-community=https://prometheus-community.github.io/helm-charts \
+	open-telemetry=https://open-telemetry.github.io/opentelemetry-helm-charts
+
+prometheus_CHART := prometheus-community/prometheus
+prometheus_VERSION := 29.38.1
+loki_CHART := grafana-community/loki
+loki_VERSION := 19.4.0
+tempo_CHART := grafana-community/tempo
+tempo_VERSION := 3.2.1
+alloy_CHART := grafana/alloy
+alloy_VERSION := 1.14.3
+grafana_CHART := grafana-community/grafana
+grafana_VERSION := 14.0.1
+
+# Backends first, then Alloy (which sends to them), then Grafana (which reads them).
+OBSERVABILITY := prometheus loki tempo alloy grafana
+
+.PHONY: helm-repos
+helm-repos: ## Add/update the third-party Helm repos
+	@for r in $(HELM_REPOS); do helm repo add --force-update $${r%%=*} $${r#*=} >/dev/null; done
+	helm repo update $(foreach r,$(HELM_REPOS),$(firstword $(subst =, ,$(r))))
+
+install-%: ## Install/upgrade one observability chart: install-loki | install-grafana | ...
+	$(if $(filter $*,$(OBSERVABILITY)),,$(error Unknown observability chart "$*". Choose from: $(OBSERVABILITY)))
+	$(HELM) upgrade --install $* $($*_CHART) --version $($*_VERSION) \
+		--namespace $(OBS_NAMESPACE) -f deploy/helm/$*.yaml --wait --timeout 5m
+
+.PHONY: observability-up
+observability-up: helm-repos ## Install the Grafana stack: Prometheus, Loki, Tempo, Alloy, Grafana
+	@for c in $(OBSERVABILITY); do $(MAKE) --no-print-directory install-$$c || exit 1; done
+	@echo ""
+	@echo "  Grafana: http://grafana.localhost$(PORT_SUFFIX)  (anonymous admin; or admin/admin)"
+	@echo ""
+
+.PHONY: observability-status
+observability-status: ## Show the Grafana stack's pods
+	$(KUBECTL) -n $(OBS_NAMESPACE) get pods,svc,ingress
+
+.PHONY: alloy-ui
+alloy-ui: ## Port-forward the Alloy UI (pipeline graph) to http://localhost:12345
+	$(KUBECTL) -n $(OBS_NAMESPACE) port-forward svc/alloy 12345:12345
+
 # ---- Load generator -----------------------------------------------------------------
 VUS      ?= 5
 DURATION ?= 5m

@@ -18,7 +18,7 @@ browser ─► web (Next.js) ─► orders-api (Laravel, php-fpm+nginx) ─► c
 
 **Part 2: telemetry added on top**
 ```
-all apps ─OTLP─► otel-collector ─┬─► Alloy ─► Tempo (traces) / Mimir (metrics) / Loki (logs) ─► Grafana
+all apps ─OTLP─► otel-collector ─┬─► Alloy ─► Tempo (traces) / Prometheus (metrics) / Loki (logs) ─► Grafana
                                  └─► Honeycomb (otlphttp, x-honeycomb-team)
 browser ─OTLP/http─► web /api/otel (proxy) ─► otel-collector
 ```
@@ -27,7 +27,8 @@ browser ─OTLP/http─► web /api/otel (proxy) ─► otel-collector
 
 - Laravel uses **MySQL**, with **Redis** as the queue. PHP runs as **php-fpm + nginx**. The worker is a separate Deployment built from the same image.
 - In Part 1, every app writes **JSON logs to stdout**: Go `slog` JSON handler, Laravel `stderr` channel with the JSON formatter, and Next.js `console`.
-- Pipeline (Part 2): apps send OTLP to a single **OTel Collector (contrib)**, which fans out to **Alloy** (feeding Tempo, Mimir and Loki) and to **Honeycomb**.
+- Pipeline (Part 2): apps send OTLP to a single **OTel Collector (contrib)**, which fans out to **Alloy** (feeding Tempo, Prometheus and Loki) and to **Honeycomb**.
+- Metrics are stored in **Prometheus**, not Mimir. Mimir's chart is 16 workloads plus Kafka and MinIO, and its scaling, long-term storage and multi-tenancy aren't needed for a one-cluster demo. Prometheus 3 accepts OTLP natively, and swapping to Mimir later only changes Alloy's metrics exporter URL and the Grafana datasource.
 - Browser OTLP goes through a Next.js route (`/api/otel`), so the collector needs no CORS setup and isn't exposed.
 - Host access uses the k3d **Traefik ingress** on `*.localhost`: `shop.`, `orders.`, `catalogue.`, `grafana.`.
 - Each component gets **its own Helm chart** under `deploy/charts/`. Third-party charts are configured with values files in `deploy/helm/`.
@@ -41,7 +42,7 @@ browser ─OTLP/http─► web /api/otel (proxy) ─► otel-collector
 - `web/` — Next.js app (TypeScript, app router) and Dockerfile
 - `deploy/k3d/` — cluster config
 - `deploy/charts/` — our own charts: `catalogue-api`, `orders-api` (web and worker Deployments, migrate Job), `web`, `mysql`, `redis`, `dashboards`
-- `deploy/helm/` — values files for the third-party charts (grafana, loki, mimir, tempo, alloy, otel-collector)
+- `deploy/helm/` — values files for the third-party charts (prometheus, loki, tempo, alloy, grafana, otel-collector)
 - `loadgen/` — k6 script
 - `Makefile`, `.env.example` (`HONEYCOMB_API_KEY`), `docs/`
 
@@ -95,10 +96,10 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 
 ## Gotchas
 
-- **PHP metrics:** each php-fpm request is short-lived, so cumulative counters would reset on every request. Use delta temporality (`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`) and add a `deltatocumulative` processor in the collector before the Mimir path. Honeycomb accepts delta as is.
+- **PHP metrics:** each php-fpm request is short-lived, so cumulative counters would reset on every request. Use delta temporality (`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`) and add a `deltatocumulative` processor in the collector before the Prometheus path. Honeycomb accepts delta as is.
 - **CORS:** in Part 1, orders-api must allow requests from `shop.localhost`. In Part 2, it must also allow the `traceparent`/`tracestate` headers.
 - **MySQL and Redis images:** Bitnami charts and images are no longer freely maintained. Our own charts use the official images instead.
-- **Mimir size:** use `mimir-distributed` with small replica counts and low resource values, or monolithic mode. Give Docker about 6–8 GB RAM for k3d.
+- **Chart sources:** `grafana/grafana`, `grafana/tempo` (and `grafana/loki`, which is older) have moved to the **grafana-community** repo, so use that. Alloy stays in `grafana/`, and Prometheus comes from `prometheus-community/`. Give Docker about 6–8 GB RAM for k3d.
 - **Local images:** build them locally and load them with `k3d image import`, using `imagePullPolicy: IfNotPresent`.
 - **catalogue-api storage:** its data lives on a ReadWriteOnce PVC (`local-path`), so it runs with `replicas: 1` and the `Recreate` strategy.
 
@@ -211,20 +212,39 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 # Part 2 — Observability
 
 ## Stage 8 — Grafana stack (Helm)
-- [ ] `make helm-repos` (grafana, open-telemetry)
-- [ ] Install Loki (single binary, filesystem storage, native OTLP enabled)
-- [ ] Install Mimir (minimal values, OTLP endpoint `/otlp`)
-- [ ] Install Tempo (single binary, OTLP gRPC receiver)
-- [ ] Install Alloy: `otelcol.receiver.otlp` → batch → exporters to Tempo (otlp), Mimir (otlphttp `/otlp`) and Loki (otlphttp `/otlp`)
-- [ ] Install Grafana with provisioned datasources, including Tempo↔Loki↔Mimir links (traces-to-logs, exemplars), and ingress `grafana.localhost`
-- [ ] `make observability-up` runs all of the above
-- [ ] Verify: Grafana loads and the datasources pass their health checks
+- [x] `make helm-repos`: grafana, grafana-community, prometheus-community, open-telemetry. Chart versions are pinned in the Makefile, and values live in `deploy/helm/<release>.yaml`
+- [x] **Prometheus** (`prometheus-community/prometheus` 29.38.1, Prometheus 3.15):
+  - server only (alertmanager, node-exporter, kube-state-metrics and pushgateway off)
+  - flags `--web.enable-otlp-receiver`, `--web.enable-remote-write-receiver`, `--enable-feature=exemplar-storage`
+  - OTLP resource attributes promoted to labels, `out_of_order_time_window: 30m`
+  - the chart's default Kubernetes scrape jobs are kept, for pod CPU/memory
+- [x] **Loki** (`grafana-community/loki` 19.4.0, Loki 3.7):
+  - Monolithic, filesystem storage, tsdb v13 with structured metadata (needed for OTLP), 72h retention, pattern ingester
+  - gateway, caches, canary and the read/write/backend targets off
+  - memberlist logs "no such host" for about 90s at start-up, then joins; that's harmless
+- [x] **Tempo** (`grafana-community/tempo` 3.2.1, Tempo 3.1):
+  - single binary on a PVC, 72h retention
+  - metrics generator (`service-graphs`, `span-metrics`) remote-writes to Prometheus
+  - the Jaeger receiver can't be removed, because the chart's Service template needs it
+- [x] **Alloy** (`grafana/alloy` 1.14.3, Alloy 1.21):
+  - a single Deployment (not the default DaemonSet) with OTLP ports 4317/4318 on its Service
+  - pipeline: `otelcol.receiver.otlp` → batch → `otlp` to Tempo, `otlphttp` to Prometheus `/api/v1/otlp` and to Loki `/otlp`
+  - config checked with `alloy validate`; `make alloy-ui` port-forwards the UI
+- [x] **Grafana** (`grafana-community/grafana` 14.0.1, Grafana 13.2) at `grafana.localhost`:
+  - anonymous Admin (or admin/admin)
+  - provisioned datasources with fixed uids (`prometheus`, `loki`, `tempo`): Tempo → Loki (traces to logs by trace ID), Tempo → Prometheus (traces to metrics, service map), Loki → Tempo (`trace_id` derived field), Prometheus → Tempo (exemplars)
+  - the dashboard sidecar is enabled for Stage 14
+- [x] `make observability-up` (about 4 min with a cold image cache), `make install-<chart>` for one chart, `make observability-status`
+- [x] Verify:
+  - all 3 datasource health checks are OK
+  - `telemetrygen` traces, metrics and logs sent straight to Alloy show up in Tempo (14 traces), Prometheus (`gen`) and Loki (27 lines), all queried through Grafana
+  - Tempo's `traces_spanmetrics_*` series appear in Prometheus
 
 ## Stage 9 — OTel Collector + Honeycomb
 - [ ] `make secrets` creates the `honeycomb` Secret from `.env`
 - [ ] Install the opentelemetry-collector chart (contrib image, deployment mode):
   - Receivers: otlp grpc and http
-  - Processors: memory_limiter, k8sattributes, resource, deltatocumulative (on the metrics→alloy pipeline only), batch
+  - Processors: memory_limiter, k8sattributes, resource, deltatocumulative (on the metrics→alloy pipeline only, since Prometheus needs cumulative), batch
   - Exporters: `otlp/alloy`, `otlphttp/honeycomb`
 - [ ] Verify with a `telemetrygen` Job (`make smoke-telemetry`): traces appear in both Tempo and Honeycomb
 

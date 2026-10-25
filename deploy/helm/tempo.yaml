@@ -1,0 +1,40 @@
+# grafana-community/tempo — single-binary Tempo with local storage. Traces
+# arrive over OTLP gRPC (from Alloy) on :4317.
+tempo:
+  reportingEnabled: false
+  retention: 72h
+
+  # Alloy sends OTLP. The chart's Jaeger receiver stays on, because its Service
+  # template fails if it's removed.
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+
+  # Turn spans into RED metrics and a service graph, written to Prometheus.
+  # They drive Grafana's service map and the "span metrics" panels.
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://prometheus-server.observability.svc/api/v1/write
+    storage:
+      path: /var/tempo/generator/wal
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - service-graphs
+          - span-metrics
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+persistence:
+  enabled: true
+  size: 5Gi
