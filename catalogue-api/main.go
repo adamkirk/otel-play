@@ -11,16 +11,18 @@ import (
 	"time"
 )
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()}))
+// stdoutLogger is for logging when OpenTelemetry isn't running: before it's
+// set up and after it's shut down.
+var stdoutLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()}))
 
-	if err := run(logger); err != nil {
-		logger.Error("fatal", "error", err)
+func main() {
+	if err := run(); err != nil {
+		stdoutLogger.Error("fatal", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run() error {
 	addr := ":" + env("PORT", "8080")
 	dataPath := env("DATA_PATH", "/data/products.json")
 
@@ -29,13 +31,16 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	defer func() {
-		// Flush any spans still buffered in the batcher before exiting.
+		// Flush any spans, metrics and logs still buffered before exiting.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := shutdownTelemetry(ctx); err != nil {
-			logger.Error("telemetry shutdown failed", "error", err)
+			stdoutLogger.Error("telemetry shutdown failed", "error", err)
 		}
 	}()
+
+	// Logs go to stdout and over OTLP from here on.
+	logger := newLogger(logLevel())
 
 	store, seeded, err := OpenStore(dataPath)
 	if err != nil {

@@ -290,8 +290,17 @@ One signal at a time, checking Grafana and Honeycomb after each step.
   - the collector sent the same number of metric points to Alloy and Honeycomb, with 0 failed
 
 ### 10c — Logs
-- [ ] Bridge `slog` to OTLP with `otelslog` (keeping JSON on stdout too), so log records carry trace_id/span_id
-- [ ] Verify: Loki logs link to Tempo traces, and Honeycomb shows logs alongside the trace
+- [x] LoggerProvider with a batch processor and the OTLP gRPC log exporter (`otlploggrpc`), set globally and shut down on exit along with traces and metrics
+- [x] `newLogger` (`logging.go`): one `slog` logger fanning out through Go 1.26's `slog.NewMultiHandler` to:
+  - stdout JSON, wrapped by `traceContextHandler`, which adds `trace_id`/`span_id` when the context has a span (so `kubectl logs` lines match traces too)
+  - the `otelslog` bridge → OTLP (the SDK attaches the span context to each record), wrapped by `minLevelHandler`, since otelslog has no level option and `LOG_LEVEL` should apply to both
+  - `main` uses a plain stdout logger before telemetry is set up and after it's shut down
+- [x] Trace links only work if log calls pass the context (`logger.InfoContext(ctx, …)`). The request logger runs inside otelhttp, so every request line has one. Tests cover both wrapper handlers
+- [x] Verify:
+  - stdout lines carry `trace_id`/`span_id`
+  - in Loki, `service_name`, `k8s_*` and `deployment_environment_name` are indexed labels; `trace_id`, `span_id`, `severity_text` and the slog attributes (`product_id`, `requested`, `available`) are structured metadata
+  - `{service_name="catalogue-api"} | trace_id="<id>"` returns exactly that request's lines, and the ID opens the same trace in Tempo
+  - the collector sent the same number of log records to Alloy and Honeycomb, with 0 failed
 
 ## Stage 11 — Instrument orders-api + worker
 - [ ] Add the `opentelemetry` extension to the Dockerfile (`install-php-extensions opentelemetry`) and `OTEL_PHP_AUTOLOAD_ENABLED=true`

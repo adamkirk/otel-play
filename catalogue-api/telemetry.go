@@ -6,9 +6,11 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -61,6 +63,18 @@ func setupTelemetry(ctx context.Context) (shutdown func(context.Context) error, 
 	)
 	otel.SetMeterProvider(meterProvider)
 
+	// Logs are batched like spans. The slog bridge (see newLogger) writes to
+	// this provider, which tags each record with the active span's IDs.
+	logExporter, err := otlploggrpc.New(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create log exporter: %w", err)
+	}
+	loggerProvider := sdklog.NewLoggerProvider(
+		sdklog.WithResource(res),
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+	)
+	otel.SetLoggerProvider(loggerProvider)
+
 	// W3C traceparent/tracestate and baggage, so traces join up with the
 	// services that call us.
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
@@ -69,6 +83,10 @@ func setupTelemetry(ctx context.Context) (shutdown func(context.Context) error, 
 	))
 
 	return func(ctx context.Context) error {
-		return errors.Join(tracerProvider.Shutdown(ctx), meterProvider.Shutdown(ctx))
+		return errors.Join(
+			tracerProvider.Shutdown(ctx),
+			meterProvider.Shutdown(ctx),
+			loggerProvider.Shutdown(ctx),
+		)
 	}, nil
 }
