@@ -169,10 +169,22 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
   - a burst of orders builds a backlog, and retries queue behind it
 
 ## Stage 5 — web (Next.js)
-- [ ] `create-next-app` (TypeScript, app router) with the pages from the services section. The basket lives in client state or localStorage
-- [ ] Server-side fetches use the in-cluster catalogue URL. Browser calls use `orders.localhost`, configured by env vars
-- [ ] Dockerfile (standalone output) and Helm chart `deploy/charts/web`: Deployment, Service, Ingress `shop.localhost`
-- [ ] Verify: browse `shop.localhost`, add an item to the basket, check out, and the order status page reaches paid or failed
+- [x] `create-next-app` (Next 16.4, TypeScript, app router, Tailwind). Cache Components is on by default, so request-time work sits inside `<Suspense>`, and the generated `AGENTS.md` (Next's pointer to its bundled docs) is kept
+- [x] Pages:
+  - `/` product grid
+  - `/products/[id]` detail with **Add to basket**
+  - `/basket` with **Checkout**
+  - `/orders/[id]` polls every 1s until the order reaches a final status, with a **Cancel** button
+  - the basket lives in a client context backed by localStorage
+- [x] Config at request time: `runtimeConfig()` calls `await connection()` before reading `CATALOGUE_URL` / `ORDERS_PUBLIC_URL`, so they aren't baked in at build time. The browser URL is passed to client components as a prop. One image works for any hostname
+- [x] Server-side catalogue fetches (`src/lib/catalogue.ts`) are uncached and write one JSON log line per call (path, status, duration_ms). The browser calls orders-api directly (cross-origin)
+- [x] Dockerfile (`node:26-alpine`, `output: 'standalone'`, numeric user 1000) and Helm chart `deploy/charts/web`: Deployment (read-only root filesystem with an emptyDir for `.next/cache`, `preStop` sleep), Service, Ingress `shop.localhost`, probes on `/api/health`
+- [x] Make targets: `build-web`, `import-web`, `deploy-web`
+- [x] Verify:
+  - pages render with live stock
+  - checkout POST passes CORS from `shop.localhost`, and order status polling reaches paid
+  - `kubectl logs deploy/web` shows JSON catalogue request logs
+  - known quirk: an unknown product shows the 404 page (with `noindex`) but returns HTTP 200, because streaming sends the status line before the Suspense'd lookup calls `notFound()`
 
 ## Stage 6 — App wiring
 - [ ] Make targets:

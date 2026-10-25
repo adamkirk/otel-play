@@ -1,0 +1,7 @@
+.next
+node_modules
+.env*
+Dockerfile
+.dockerignore
+README.md
+AGENTS.md

@@ -135,3 +135,21 @@ deploy-orders: ## Install/upgrade the orders-api chart (runs migrations first)
 .PHONY: test-orders
 test-orders: ## Run the orders-api test suite (in Docker, no local PHP needed)
 	docker run --rm -v "$(CURDIR)/orders-api":/app -w /app composer:2 php artisan test
+
+# ---- web ------------------------------------------------------------------------
+.PHONY: build-web
+build-web: ## Build the Next.js web image
+	docker build -t $(WEB_IMAGE) web
+
+.PHONY: import-web
+import-web: ## Import the web image into k3d
+	k3d image import -c $(CLUSTER_NAME) $(WEB_IMAGE)
+
+.PHONY: deploy-web
+deploy-web: ## Install/upgrade the web chart
+	$(HELM) upgrade --install web deploy/charts/web \
+		--namespace $(APP_NAMESPACE) \
+		--set image.repository=$(firstword $(subst :, ,$(WEB_IMAGE))) \
+		--set image.tag=$(IMAGE_TAG) \
+		--set-string podAnnotations.rollme=$(shell date +%s) \
+		--wait
