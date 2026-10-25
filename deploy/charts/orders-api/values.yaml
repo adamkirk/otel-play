@@ -39,6 +39,28 @@ podAnnotations: {}
 migrations:
   enabled: true
 
+# Queue worker: same image, running `php artisan queue:work`.
+worker:
+  enabled: true
+  replicas: 1
+  args:
+    - php
+    - artisan
+    - queue:work
+    - redis
+    - --sleep=1
+    # Drop the "... RUNNING / ... DONE" console lines; jobs are logged as
+    # JSON by the queue event listeners instead.
+    - --quiet
+    # Restart the process hourly so memory leaks can't build up.
+    - --max-time=3600
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
 nginx:
   image:
     repository: nginxinc/nginx-unprivileged

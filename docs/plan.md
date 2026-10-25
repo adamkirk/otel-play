@@ -153,10 +153,20 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
   - `kubectl logs` shows JSON logs from both services
 
 ## Stage 4 — orders-worker
-- [ ] `ProcessOrder`, `CancelOrder` and `SendConfirmation` jobs, with the fake payment and ~10% failures that get retried
-- [ ] Log job start, end and failure with the order ID, job name and attempt number
-- [ ] Worker Deployment in the `orders-api` chart (`worker.enabled`, `worker.replicas`), using the same image with `args: [php, artisan, queue:work, ...]`. Use `args` rather than `command`, so the entrypoint's `optimize` still runs
-- [ ] Verify: an order moves from pending to paid or failed, and the worker logs show retries
+- [x] Jobs:
+  - `ProcessOrder` charges through a fake `PaymentGateway` (200–1500ms; 10% timeouts that get retried, 5% declines that fail at once). Rates are set in `config/orders.php` with `PAYMENT_*` env vars. It runs 3 tries with backoff `[2, 5]`, and its `failed()` hook marks the order failed. It skips orders that were cancelled while queued
+  - `CancelOrder` cancels pending or paid orders
+  - `SendConfirmation` logs a fake email, or skips if there's no email address
+- [x] Logging:
+  - queue event listeners in `AppServiceProvider` write `job started`, `job processed` (with `duration_ms`), `job attempt failed` (with `will_retry`) and `job failed`, each with the job name, uuid, queue and attempt. This is the worker's equivalent of `LogRequest`
+  - `order_id` goes on Laravel's `Context` rather than `Log::withContext`, so it's carried from the HTTP request into the job payload and cleared between jobs
+- [x] Worker Deployment in the `orders-api` chart (`worker.enabled`, `worker.replicas`). It uses the same image with `args: [php, artisan, queue:work, redis, --sleep=1, --quiet, --max-time=3600]`. `--quiet` drops queue:work's non-JSON console lines, and `args` (not `command`) keeps the entrypoint's `optimize`
+- [x] Rollout fix: `preStop` sleeps on the web pod (nginx 5s, php 8s), so `make deploy-orders` doesn't drop requests with a 502 while Traefik catches up. Tested: 80 of 80 requests succeeded during a rollout
+- [x] Tests: `OrderJobsTest` covers paid + confirmation queued, decline, transient error rethrown, the `failed()` hook, and cancel before process
+- [x] Verify:
+  - orders move from pending to paid, failed (declined) or cancelled
+  - worker logs show `job attempt failed … will_retry: true` followed by attempt 2 succeeding
+  - a burst of orders builds a backlog, and retries queue behind it
 
 ## Stage 5 — web (Next.js)
 - [ ] `create-next-app` (TypeScript, app router) with the pages from the services section. The basket lives in client state or localStorage

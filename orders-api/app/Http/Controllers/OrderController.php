@@ -11,6 +11,7 @@ use App\Models\Order;
 use App\Services\CatalogueClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -65,7 +66,8 @@ class OrderController extends Controller
             return $order;
         });
 
-        Log::withContext(['order_id' => $order->id]);
+        // Context is added to every log line and carried into queued jobs.
+        Context::add('order_id', $order->id);
         Log::info('order created', ['total_pence' => $order->total_pence, 'items' => $lines->count()]);
 
         // Toy behaviour: stock already reserved for earlier lines is not
@@ -94,8 +96,9 @@ class OrderController extends Controller
             return response()->json(['message' => "Order is already {$order->status->value}."], 409);
         }
 
+        Context::add('order_id', $order->id);
         CancelOrder::dispatch($order->id);
-        Log::info('order cancellation requested', ['order_id' => $order->id]);
+        Log::info('order cancellation requested');
 
         return response()->json(['message' => 'Cancellation queued.'], 202);
     }

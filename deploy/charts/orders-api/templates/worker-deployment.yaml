@@ -1,0 +1,51 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "orders-api.fullname" . }}-worker
+  labels:
+    {{- include "orders-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "orders-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "orders-api.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # queue:work finishes its current job on SIGTERM before exiting. The
+      # slowest job (payment) takes well under this.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33 # www-data
+        runAsGroup: 33
+      containers:
+        - name: worker
+          image: {{ include "orders-api.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # args, not command, so the image's entrypoint (artisan optimize)
+          # still runs first.
+          args:
+            {{- toYaml .Values.worker.args | nindent 12 }}
+          env:
+            - name: APP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "orders-api.fullname" . }}-app-key
+                  key: app-key
+            {{- include "orders-api.env" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}

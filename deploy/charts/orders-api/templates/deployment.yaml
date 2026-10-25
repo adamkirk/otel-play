@@ -38,6 +38,12 @@ spec:
           ports:
             - name: fastcgi
               containerPort: 9000
+          # Outlive nginx's preStop, so php-fpm is still there for requests
+          # nginx is finishing off.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 8
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
@@ -66,6 +72,12 @@ spec:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+          # Keep serving while Traefik notices the pod is going away, so
+          # rollouts don't drop requests with a 502.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           resources:
             {{- toYaml .Values.nginx.resources | nindent 12 }}
           securityContext:

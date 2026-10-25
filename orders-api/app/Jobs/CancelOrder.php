@@ -2,13 +2,16 @@
 
 namespace App\Jobs;
 
+use App\Enums\OrderStatus;
+use App\Models\Order;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Cancels an order. The cancellation logic arrives in Stage 4 along with the
- * worker; for now this only proves the job is dispatched.
+ * Cancels a pending or paid order. A real shop would also refund payment and
+ * release stock; this one just changes the status.
  */
 class CancelOrder implements ShouldQueue
 {
@@ -18,6 +21,18 @@ class CancelOrder implements ShouldQueue
 
     public function handle(): void
     {
-        Log::info('cancelling order', ['order_id' => $this->orderId]);
+        Context::add('order_id', $this->orderId);
+
+        $order = Order::findOrFail($this->orderId);
+
+        if (! in_array($order->status, [OrderStatus::Pending, OrderStatus::Paid], true)) {
+            Log::info('order cannot be cancelled, skipping', ['status' => $order->status->value]);
+
+            return;
+        }
+
+        $previous = $order->status;
+        $order->update(['status' => OrderStatus::Cancelled]);
+        Log::info('order cancelled', ['previous_status' => $previous->value]);
     }
 }
