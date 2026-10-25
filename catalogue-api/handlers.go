@@ -20,6 +20,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /products", s.listProducts)
 	mux.HandleFunc("GET /products/{id}", s.getProduct)
 	mux.HandleFunc("POST /stock/reserve", s.reserveStock)
+	mux.HandleFunc("POST /stock/restock", s.restockStock)
 	mux.HandleFunc("GET /chaos", s.chaos)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	return requestLogger(s.logger, mux)
@@ -50,7 +51,7 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
-type reserveRequest struct {
+type stockRequest struct {
 	ProductID string `json:"product_id"`
 	Quantity  int    `json:"quantity"`
 }
@@ -62,13 +63,8 @@ type reserveResponse struct {
 }
 
 func (s *server) reserveStock(w http.ResponseWriter, r *http.Request) {
-	var req reserveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.ProductID == "" || req.Quantity < 1 {
-		writeError(w, http.StatusUnprocessableEntity, "product_id and a positive quantity are required")
+	req, ok := decodeStockRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -95,6 +91,52 @@ func (s *server) reserveStock(w http.ResponseWriter, r *http.Request) {
 	s.logger.InfoContext(r.Context(), "stock reserved",
 		"product_id", p.ID, "quantity", req.Quantity, "remaining", p.Stock)
 	writeJSON(w, http.StatusOK, reserveResponse{ProductID: p.ID, Reserved: req.Quantity, Remaining: p.Stock})
+}
+
+type restockResponse struct {
+	ProductID string `json:"product_id"`
+	Added     int    `json:"added"`
+	Stock     int    `json:"stock"`
+}
+
+// restockStock stands in for a warehouse delivery. The load generator calls
+// it to stop the shop selling out during long runs.
+func (s *server) restockStock(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeStockRequest(w, r)
+	if !ok {
+		return
+	}
+
+	p, err := s.store.Restock(req.ProductID, req.Quantity)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, "product not found")
+		return
+	case err != nil:
+		s.logger.ErrorContext(r.Context(), "restock failed", "product_id", req.ProductID, "error", err)
+		writeError(w, http.StatusInternalServerError, "could not restock")
+		return
+	}
+
+	s.cache.Delete(p.ID)
+	s.logger.InfoContext(r.Context(), "stock restocked",
+		"product_id", p.ID, "quantity", req.Quantity, "stock", p.Stock)
+	writeJSON(w, http.StatusOK, restockResponse{ProductID: p.ID, Added: req.Quantity, Stock: p.Stock})
+}
+
+// decodeStockRequest parses and validates a reserve/restock body, writing an
+// error response and returning false if it is invalid.
+func decodeStockRequest(w http.ResponseWriter, r *http.Request) (stockRequest, bool) {
+	var req stockRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return req, false
+	}
+	if req.ProductID == "" || req.Quantity < 1 {
+		writeError(w, http.StatusUnprocessableEntity, "product_id and a positive quantity are required")
+		return req, false
+	}
+	return req, true
 }
 
 // chaos sleeps for up to 2s and fails ~20% of the time, to give the

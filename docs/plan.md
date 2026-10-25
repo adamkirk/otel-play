@@ -56,6 +56,7 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 | `GET /products` | Product list read from a JSON file on a PVC, seeded from an embedded default on first start | span, `catalogue.products.listed` counter |
 | `GET /products/{id}` | Product plus a fake cache lookup | child span `cache.lookup`, `catalogue.cache.requests{result=hit\|miss}` |
 | `POST /stock/reserve` | Decrements stock and writes it back to the file (mutex + atomic rename), with random latency | span attributes product.id/qty, `catalogue.stock.level` observable gauge |
+| `POST /stock/restock` | Adds stock (a pretend warehouse delivery), called by the load generator so long runs don't sell out | span attributes product.id/qty |
 | `GET /chaos` | Random delay or a 500 | error spans, `http.server.duration` histogram |
 | `GET /healthz` | Probe | not traced |
 
@@ -196,9 +197,14 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 - [x] Verify: `make cluster-down && make apps-up` rebuilt the whole shop in about 95s with warm Docker layers, and a fresh order went from pending to paid with the worker logs tagged by `order_id`
 
 ## Stage 7 — Load generator
-- [ ] `loadgen/script.js` (k6): browses products, views a product, creates orders, and occasionally cancels an order or calls chaos
-- [ ] `make load` runs k6 locally against `*.localhost`, with an option to run it as a k8s Job
-- [ ] Verify: `make load` runs cleanly, and the logs show steady traffic across all services
+- [x] `loadgen/script.js` (k6 1.8) with three scenarios:
+  - `shoppers` (`VUS` constant VUs): browse `/` and 1–3 product pages on the storefront; 60% check out, 10% of those cancel, 3% send an unknown product (422); then poll the order until it's settled
+  - `chaos`: `GET /chaos` every 5s
+  - `warehouse`: every 15s, restock anything under 20 units by 50
+- [x] Added `POST /stock/restock` to catalogue-api (with a test) so long runs don't sell out. There are only about 560 units in stock
+- [x] Expected business outcomes (404/409/422, and 500 from `/chaos`) don't count towards `http_req_failed`. Thresholds on the shoppers scenario: failed < 5%, checks > 95%. Custom metrics: `orders_placed`, `orders_rejected`, `order_outcomes{status}`, `order_time_to_settle`. Requests are tagged with route-style names (`GET /api/orders/[id]`) so per-ID URLs don't explode the metric cardinality
+- [x] `make load` (local, `VUS=5 DURATION=5m` by default) and `make load-job` (a k6 Job in the cluster against the Services, with the script and settings from ConfigMaps), plus `make load-stop`. Follow the Job with `make logs SVC=job/loadgen`
+- [x] Verify: a 1-minute local run made 243 requests with 0% failed and 100% of checks passing; 26 orders went to paid, failed or cancelled; chaos 500s show up in the catalogue-api logs. A 30-second in-cluster Job also passed its thresholds
 
 ---
 

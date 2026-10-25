@@ -38,6 +38,27 @@ func TestStoreSeedsAndPersists(t *testing.T) {
 	}
 }
 
+func TestRestock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "products.json")
+	s, _, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, _ := s.Get("mug-enamel")
+	if _, err := s.Restock("mug-enamel", 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Restock("nope", 5); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+
+	reopened, _, _ := OpenStore(path)
+	if after, _ := reopened.Get("mug-enamel"); after.Stock != before.Stock+5 {
+		t.Fatalf("stock = %d, want %d", after.Stock, before.Stock+5)
+	}
+}
+
 func TestReserveErrors(t *testing.T) {
 	s, _, err := OpenStore(filepath.Join(t.TempDir(), "products.json"))
 	if err != nil {

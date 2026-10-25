@@ -106,6 +106,28 @@ func (s *Store) Reserve(id string, qty int) (Product, error) {
 	return Product{}, ErrNotFound
 }
 
+// Restock adds stock to a product and persists the change. It returns the
+// updated product.
+func (s *Store) Restock(id string, qty int) (Product, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.products {
+		p := &s.products[i]
+		if p.ID != id {
+			continue
+		}
+
+		p.Stock += qty
+		if err := s.save(); err != nil {
+			p.Stock -= qty
+			return *p, err
+		}
+		return *p, nil
+	}
+	return Product{}, ErrNotFound
+}
+
 // save writes to a temp file and renames it over the real one, so a crash
 // mid-write never leaves a truncated file. Callers must hold the lock (or be
 // in OpenStore before the store is shared).

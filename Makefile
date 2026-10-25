@@ -191,3 +191,26 @@ open: ## Print the shop's URLs
 	@echo "  Orders API:    http://orders.localhost$(PORT_SUFFIX)/api/orders"
 	@echo "  Catalogue API: http://catalogue.localhost$(PORT_SUFFIX)/products"
 	@echo ""
+
+# ---- Load generator -----------------------------------------------------------------
+VUS      ?= 5
+DURATION ?= 5m
+
+.PHONY: load
+load: ## Generate traffic from this machine with k6 (VUS=5 DURATION=5m)
+	VUS=$(VUS) DURATION=$(DURATION) k6 run loadgen/script.js
+
+.PHONY: load-job
+load-job: ## Generate traffic from inside the cluster with a k6 Job (VUS, DURATION)
+	$(KUBECTL) -n $(APP_NAMESPACE) create configmap loadgen-script \
+		--from-file=loadgen/script.js --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) -n $(APP_NAMESPACE) create configmap loadgen-env \
+		--from-literal=VUS=$(VUS) --from-literal=DURATION=$(DURATION) \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) -n $(APP_NAMESPACE) delete job loadgen --ignore-not-found
+	$(KUBECTL) -n $(APP_NAMESPACE) apply -f loadgen/job.yaml
+	@echo "Follow it with: make logs SVC=job/loadgen   Stop it with: make load-stop"
+
+.PHONY: load-stop
+load-stop: ## Stop the in-cluster k6 Job
+	$(KUBECTL) -n $(APP_NAMESPACE) delete job loadgen --ignore-not-found
