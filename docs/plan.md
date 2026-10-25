@@ -115,13 +115,13 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 - [x] Verify: `make cluster-status` shows 3 Ready nodes and Traefik 1/1, and `curl -H "Host: test.localhost" localhost` returns Traefik's 404
 
 ## Stage 2 — catalogue-api (Go)
-- [ ] Go module, `net/http` ServeMux, and a `slog` JSON logger to stdout that logs each request (method, path, status, duration)
-- [ ] File-backed product store (`DATA_PATH`, default `/data/products.json`), seeded from an embedded default if the file is missing
-- [ ] Endpoints from the table above
-- [ ] Multi-stage Dockerfile (distroless, non-root, with a writable data dir)
-- [ ] Make targets: `build-catalogue`, `import-catalogue`, `deploy-catalogue`. These set the per-service pattern that Stage 6 generalises
-- [ ] Helm chart `deploy/charts/catalogue-api`: Deployment (1 replica, Recreate), PVC mounted at `/data`, Service, Ingress `catalogue.localhost`, liveness/readiness on `/healthz`
-- [ ] Verify:
+- [x] Go module (standard library only), `net/http` ServeMux, and a `slog` JSON logger to stdout that logs each request (method, path, status, duration)
+- [x] File-backed product store (`DATA_PATH`, default `/data/products.json`), seeded from an embedded default if the file is missing
+- [x] Endpoints from the table above
+- [x] Multi-stage Dockerfile (distroless, non-root, with a writable data dir). The user must be numeric (`65532`), or Kubernetes' `runAsNonRoot` check refuses to start the container
+- [x] Make targets: `build-catalogue`, `import-catalogue`, `deploy-catalogue`. These set the per-service pattern that Stage 6 generalises. `deploy-catalogue` sets a timestamp pod annotation so a re-imported `dev` image still rolls the pod
+- [x] Helm chart `deploy/charts/catalogue-api`: Deployment (1 replica, Recreate), PVC mounted at `/data` (kept on uninstall), Service, Ingress `catalogue.localhost`, liveness/readiness on `/healthz`
+- [x] Verify:
   - curl the endpoints via `catalogue.localhost`
   - `kubectl logs` shows JSON request logs
   - reserve stock, delete the pod, and check the stock level survived

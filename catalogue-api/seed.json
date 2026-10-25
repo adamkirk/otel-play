@@ -1,0 +1,10 @@
+[
+  {"id": "tea-earl-grey", "name": "Earl Grey Tea", "description": "Loose leaf black tea with bergamot.", "price_pence": 650, "stock": 120},
+  {"id": "tea-sencha", "name": "Sencha Green Tea", "description": "Grassy Japanese green tea.", "price_pence": 800, "stock": 80},
+  {"id": "coffee-house-blend", "name": "House Blend Coffee", "description": "Medium roast whole beans, 250g.", "price_pence": 950, "stock": 60},
+  {"id": "coffee-espresso", "name": "Espresso Roast", "description": "Dark roast whole beans, 250g.", "price_pence": 1050, "stock": 45},
+  {"id": "mug-enamel", "name": "Enamel Mug", "description": "Camping-style enamel mug, 350ml.", "price_pence": 1200, "stock": 30},
+  {"id": "teapot-glass", "name": "Glass Teapot", "description": "Borosilicate teapot with infuser.", "price_pence": 2400, "stock": 15},
+  {"id": "grinder-hand", "name": "Hand Grinder", "description": "Burr grinder for coffee beans.", "price_pence": 3500, "stock": 10},
+  {"id": "biscuits-shortbread", "name": "Shortbread Biscuits", "description": "All-butter shortbread, 200g.", "price_pence": 350, "stock": 200}
+]

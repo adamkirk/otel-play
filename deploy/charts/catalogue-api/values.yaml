@@ -1,0 +1,32 @@
+image:
+  repository: otel-play/catalogue-api
+  tag: dev
+  # Images are loaded into k3d with `k3d image import`, never pulled.
+  pullPolicy: IfNotPresent
+
+port: 8080
+logLevel: info
+
+# Extra environment variables, as a name -> value map.
+env: {}
+
+# `make deploy-catalogue` sets a timestamp here so a re-imported image with
+# the same tag still rolls the pod.
+podAnnotations: {}
+
+persistence:
+  size: 64Mi
+  # Empty uses the cluster default (local-path on k3d).
+  storageClass: ""
+
+ingress:
+  enabled: true
+  className: traefik
+  host: catalogue.localhost
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    memory: 64Mi

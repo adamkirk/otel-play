@@ -87,3 +87,21 @@ cluster-status: ## Show nodes, namespaces and Traefik status
 	$(KUBECTL) get nodes -o wide
 	$(KUBECTL) get namespaces
 	$(KUBECTL) -n kube-system get deploy traefik
+
+# ---- catalogue-api ------------------------------------------------------------
+.PHONY: build-catalogue
+build-catalogue: ## Build the catalogue-api image
+	docker build -t $(CATALOGUE_IMAGE) catalogue-api
+
+.PHONY: import-catalogue
+import-catalogue: ## Import the catalogue-api image into k3d
+	k3d image import -c $(CLUSTER_NAME) $(CATALOGUE_IMAGE)
+
+.PHONY: deploy-catalogue
+deploy-catalogue: ## Install/upgrade the catalogue-api chart
+	$(HELM) upgrade --install catalogue-api deploy/charts/catalogue-api \
+		--namespace $(APP_NAMESPACE) \
+		--set image.repository=$(firstword $(subst :, ,$(CATALOGUE_IMAGE))) \
+		--set image.tag=$(IMAGE_TAG) \
+		--set-string podAnnotations.rollme=$(shell date +%s) \
+		--wait
