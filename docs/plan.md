@@ -187,15 +187,13 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
   - known quirk: an unknown product shows the 404 page (with `noindex`) but returns HTTP 200, because streaming sends the status line before the Suspense'd lookup calls `notFound()`
 
 ## Stage 6 — App wiring
-- [ ] Make targets:
-  - `make build`: docker build for every service
-  - `make import`: `k3d image import`
-  - `make deploy`: `helm upgrade --install` for each chart in `deploy/charts/`; the hook runs migrations
-  - `make deploy-<chart>`: deploy one chart
-  - `make lint`: `helm lint` on every chart
-  - `make apps-up`: cluster → build → import → deploy
-- [ ] `make logs SVC=...`, plus `make open` to print the URLs
-- [ ] Verify: `make cluster-down && make apps-up` brings the whole shop back from scratch
+- [x] The per-service Make targets are now pattern rules. Each app service (`catalogue`, `orders`, `web`) is declared once with its dir, image and release:
+  - `build-%`, `import-%`, `deploy-%` (`deploy-mysql` and `deploy-redis` work too); unknown names fail with the list of valid ones
+  - `make build`, `make import`, `make deploy` (data stores first, so the migration hook can reach MySQL)
+  - `make lint` (`helm lint` on every chart), `make test` (`test-catalogue` + `test-orders`, both run in Docker)
+  - `make apps-up`: cluster → build → import → deploy → print URLs
+- [x] `make status`, `make logs SVC=<deployment>` (or `SVC=statefulset/mysql`), `make open` to print the URLs
+- [x] Verify: `make cluster-down && make apps-up` rebuilt the whole shop in about 95s with warm Docker layers, and a fresh order went from pending to paid with the worker logs tagged by `order_id`
 
 ## Stage 7 — Load generator
 - [ ] `loadgen/script.js` (k6): browses products, views a product, creates orders, and occasionally cancels an order or calls chaos

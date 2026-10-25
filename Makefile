@@ -87,69 +87,107 @@ cluster-status: ## Show nodes, namespaces and Traefik status
 	$(KUBECTL) get namespaces
 	$(KUBECTL) -n kube-system get deploy traefik
 
-# ---- catalogue-api ------------------------------------------------------------
-.PHONY: build-catalogue
-build-catalogue: ## Build the catalogue-api image
-	docker build -t $(CATALOGUE_IMAGE) catalogue-api
+# ---- App services -----------------------------------------------------------------
+# Each app service has a short name, a source dir, an image and a Helm release
+# (whose chart lives at deploy/charts/<release>). The pattern rules below build,
+# import and deploy any of them, e.g. `make build-web` or `make deploy-orders`.
+APP_SERVICES := catalogue orders web
 
-.PHONY: import-catalogue
-import-catalogue: ## Import the catalogue-api image into k3d
-	k3d image import -c $(CLUSTER_NAME) $(CATALOGUE_IMAGE)
+catalogue_DIR     := catalogue-api
+catalogue_IMAGE   := $(CATALOGUE_IMAGE)
+catalogue_RELEASE := catalogue-api
 
-.PHONY: deploy-catalogue
-deploy-catalogue: ## Install/upgrade the catalogue-api chart
-	$(HELM) upgrade --install catalogue-api deploy/charts/catalogue-api \
-		--namespace $(APP_NAMESPACE) \
-		--set image.repository=$(firstword $(subst :, ,$(CATALOGUE_IMAGE))) \
-		--set image.tag=$(IMAGE_TAG) \
-		--set-string podAnnotations.rollme=$(shell date +%s) \
-		--wait
+orders_DIR     := orders-api
+orders_IMAGE   := $(ORDERS_IMAGE)
+orders_RELEASE := orders-api
 
-# ---- Data stores ----------------------------------------------------------------
-.PHONY: deploy-mysql
-deploy-mysql: ## Install/upgrade the MySQL chart
-	$(HELM) upgrade --install mysql deploy/charts/mysql --namespace $(APP_NAMESPACE) --wait
+web_DIR     := web
+web_IMAGE   := $(WEB_IMAGE)
+web_RELEASE := web
 
-.PHONY: deploy-redis
-deploy-redis: ## Install/upgrade the Redis chart
-	$(HELM) upgrade --install redis deploy/charts/redis --namespace $(APP_NAMESPACE) --wait
+# Charts that need no image of ours.
+DATA_STORES := mysql redis
 
-# ---- orders-api -------------------------------------------------------------------
-.PHONY: build-orders
-build-orders: ## Build the orders-api image (API and worker)
-	docker build -t $(ORDERS_IMAGE) orders-api
+# Deploy order matters: orders-api's migration hook needs MySQL up first.
+DEPLOY_ORDER := $(DATA_STORES) $(APP_SERVICES)
 
-.PHONY: import-orders
-import-orders: ## Import the orders-api image into k3d
-	k3d image import -c $(CLUSTER_NAME) $(ORDERS_IMAGE)
+check-service = $(if $(filter $*,$(APP_SERVICES)),,$(error Unknown service "$*". Choose from: $(APP_SERVICES)))
 
-.PHONY: deploy-orders
-deploy-orders: ## Install/upgrade the orders-api chart (runs migrations first)
-	$(HELM) upgrade --install orders-api deploy/charts/orders-api \
-		--namespace $(APP_NAMESPACE) \
-		--set image.repository=$(firstword $(subst :, ,$(ORDERS_IMAGE))) \
-		--set image.tag=$(IMAGE_TAG) \
-		--set-string podAnnotations.rollme=$(shell date +%s) \
-		--wait
+build-%: ## Build one service image: build-catalogue | build-orders | build-web
+	$(check-service)
+	docker build -t $($*_IMAGE) $($*_DIR)
+
+import-%: ## Import one service image into k3d: import-catalogue | ...
+	$(check-service)
+	k3d image import -c $(CLUSTER_NAME) $($*_IMAGE)
+
+# The rollme annotation makes a re-imported image with the same tag still roll
+# the pods.
+deploy-%: ## Install/upgrade one chart: deploy-catalogue | deploy-orders | deploy-web | deploy-mysql | deploy-redis
+	$(if $(filter $*,$(DATA_STORES)), \
+		$(HELM) upgrade --install $* deploy/charts/$* --namespace $(APP_NAMESPACE) --wait, \
+		$(check-service) \
+		$(HELM) upgrade --install $($*_RELEASE) deploy/charts/$($*_RELEASE) \
+			--namespace $(APP_NAMESPACE) \
+			--set image.repository=$(firstword $(subst :, ,$($*_IMAGE))) \
+			--set image.tag=$(IMAGE_TAG) \
+			--set-string podAnnotations.rollme=$(shell date +%s) \
+			--wait)
+
+.PHONY: build
+build: ## Build all service images
+	@for s in $(APP_SERVICES); do $(MAKE) --no-print-directory build-$$s || exit 1; done
+
+.PHONY: import
+import: ## Import all service images into k3d
+	@for s in $(APP_SERVICES); do $(MAKE) --no-print-directory import-$$s || exit 1; done
+
+.PHONY: deploy
+deploy: ## Install/upgrade every chart, data stores first
+	@for s in $(DEPLOY_ORDER); do $(MAKE) --no-print-directory deploy-$$s || exit 1; done
+
+.PHONY: lint
+lint: ## Lint all of our Helm charts
+	helm lint deploy/charts/*
+
+.PHONY: test
+test: test-catalogue test-orders ## Run all test suites
+
+.PHONY: test-catalogue
+test-catalogue: ## Run the catalogue-api tests (in Docker, no local Go needed)
+	docker run --rm -v "$(CURDIR)/catalogue-api":/src -w /src golang:1.26 go test ./...
 
 .PHONY: test-orders
-test-orders: ## Run the orders-api test suite (in Docker, no local PHP needed)
+test-orders: ## Run the orders-api tests (in Docker, no local PHP needed)
 	docker run --rm -v "$(CURDIR)/orders-api":/app -w /app composer:2 php artisan test
 
-# ---- web ------------------------------------------------------------------------
-.PHONY: build-web
-build-web: ## Build the Next.js web image
-	docker build -t $(WEB_IMAGE) web
+.PHONY: apps-up
+apps-up: ## Create the cluster and build, import and deploy the whole shop
+	@$(MAKE) --no-print-directory cluster-up
+	@$(MAKE) --no-print-directory build
+	@$(MAKE) --no-print-directory import
+	@$(MAKE) --no-print-directory deploy
+	@$(MAKE) --no-print-directory open
 
-.PHONY: import-web
-import-web: ## Import the web image into k3d
-	k3d image import -c $(CLUSTER_NAME) $(WEB_IMAGE)
+# ---- Day to day --------------------------------------------------------------------
+.PHONY: status
+status: ## Show the shop's pods, services and ingresses
+	$(KUBECTL) -n $(APP_NAMESPACE) get pods,svc,ingress
 
-.PHONY: deploy-web
-deploy-web: ## Install/upgrade the web chart
-	$(HELM) upgrade --install web deploy/charts/web \
-		--namespace $(APP_NAMESPACE) \
-		--set image.repository=$(firstword $(subst :, ,$(WEB_IMAGE))) \
-		--set image.tag=$(IMAGE_TAG) \
-		--set-string podAnnotations.rollme=$(shell date +%s) \
-		--wait
+# SVC is a Deployment name (catalogue-api, orders-api, orders-api-worker, web,
+# redis) or any kubectl resource, e.g. SVC=statefulset/mysql.
+.PHONY: logs
+logs: ## Follow a service's logs: make logs SVC=orders-api-worker
+	@test -n "$(SVC)" || { echo 'Usage: make logs SVC=<name>  (catalogue-api, orders-api, orders-api-worker, web, redis, statefulset/mysql)'; exit 1; }
+	$(KUBECTL) -n $(APP_NAMESPACE) logs -f --all-containers --prefix --tail=50 \
+		$(if $(findstring /,$(SVC)),$(SVC),deploy/$(SVC))
+
+PORT_SUFFIX := $(if $(filter 80,$(HTTP_PORT)),,:$(HTTP_PORT))
+
+.PHONY: open
+open: ## Print the shop's URLs
+	@echo ""
+	@echo "  Shop:          http://shop.localhost$(PORT_SUFFIX)"
+	@echo "  Orders API:    http://orders.localhost$(PORT_SUFFIX)/api/orders"
+	@echo "  Catalogue API: http://catalogue.localhost$(PORT_SUFFIX)/products"
+	@echo ""
