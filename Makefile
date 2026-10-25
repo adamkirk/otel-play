@@ -218,7 +218,9 @@ otel-collector_VERSION := 0.177.0
 OBSERVABILITY := prometheus loki tempo alloy otel-collector grafana
 
 HONEYCOMB_API_ENDPOINT    ?= api.honeycomb.io:443
-HONEYCOMB_METRICS_DATASET ?= otel-play-metrics
+# Honeycomb environments put OTLP metrics in a dataset called "metrics" whatever
+# this says (checked in the UI); other names may still apply to Honeycomb Classic.
+HONEYCOMB_METRICS_DATASET ?= metrics
 
 .PHONY: helm-repos
 helm-repos: ## Add/update the third-party Helm repos

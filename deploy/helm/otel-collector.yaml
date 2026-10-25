@@ -96,8 +96,10 @@ config:
       headers:
         x-honeycomb-team: ${env:HONEYCOMB_API_KEY}
 
-    # Honeycomb needs a dataset name for metrics. Traces and logs land in a
-    # dataset per service.name.
+    # Honeycomb's docs say metrics need a dataset header. In practice this
+    # environment stores OTLP metrics in its "metrics" dataset whatever the
+    # header says (the default), while traces and logs land in a dataset per
+    # service.name.
     otlp_grpc/honeycomb-metrics:
       endpoint: ${env:HONEYCOMB_API_ENDPOINT}
       headers:

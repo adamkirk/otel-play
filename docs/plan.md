@@ -54,11 +54,11 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 
 | Endpoint | Behaviour | Telemetry (Part 2) |
 |---|---|---|
-| `GET /products` | Product list read from a JSON file on a PVC, seeded from an embedded default on first start | span, `catalogue.products.listed` counter |
-| `GET /products/{id}` | Product plus a fake cache lookup | child span `cache.lookup`, `catalogue.cache.requests{result=hit\|miss}` |
-| `POST /stock/reserve` | Decrements stock and writes it back to the file (mutex + atomic rename), with random latency | span attributes product.id/qty, `catalogue.stock.level` observable gauge |
+| `GET /products` | Product list read from a JSON file on a PVC, seeded from an embedded default on first start | span, `catalogue.products.count` attribute |
+| `GET /products/{id}` | Product plus a fake cache lookup | child span `cache.lookup`, `catalogue.cache.requests{catalogue.cache.result}`, `catalogue.product.views{catalogue.product.id}` |
+| `POST /stock/reserve` | Decrements stock and writes it back to the file (mutex + atomic rename), with random latency | `warehouse.check` + `store.save` spans, `catalogue.reservations{outcome}`, `catalogue.stock.reserved`, `catalogue.warehouse.duration` histogram (with exemplars), `catalogue.stock.level` observable gauge |
 | `POST /stock/restock` | Adds stock (a pretend warehouse delivery), called by the load generator so long runs don't sell out | span attributes product.id/qty |
-| `GET /chaos` | Random delay or a 500 | error spans, `http.server.duration` histogram |
+| `GET /chaos` | Random delay or a 500 | error spans, otelhttp's `http.server.request.duration` histogram |
 | `GET /healthz` | Probe | not traced |
 
 ### orders-api (Laravel)
@@ -241,12 +241,12 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
   - Tempo's `traces_spanmetrics_*` series appear in Prometheus
 
 ## Stage 9 — OTel Collector + Honeycomb
-- [x] `make secrets` creates the `honeycomb` Secret from `.env`: `HONEYCOMB_API_KEY`, plus `HONEYCOMB_API_ENDPOINT` (default `api.honeycomb.io:443`; EU accounts use `api.eu1.honeycomb.io:443`) and `HONEYCOMB_METRICS_DATASET` (default `otel-play-metrics`). The key is read from the shell environment, never expanded by make, so `make -n` can't print it
+- [x] `make secrets` creates the `honeycomb` Secret from `.env`: `HONEYCOMB_API_KEY`, plus `HONEYCOMB_API_ENDPOINT` (default `api.honeycomb.io:443`; EU accounts use `api.eu1.honeycomb.io:443`) and `HONEYCOMB_METRICS_DATASET` (default `metrics`: Honeycomb environments store OTLP metrics in a `metrics` dataset whatever the header says, so `otel-play-metrics` never appeared). The key is read from the shell environment, never expanded by make, so `make -n` can't print it
 - [x] `open-telemetry/opentelemetry-collector` 0.177.0 (collector-contrib 0.163.2), installed by `make install-otel-collector` and part of `make observability-up`:
   - `deploy/helm/otel-collector.yaml`: a Deployment named `otel-collector`, OTLP only (the chart's Jaeger/Zipkin/self-scrape receivers removed with `null`)
   - the `kubernetesAttributes` preset adds RBAC and config, and `k8s_attributes` is listed explicitly after `memory_limiter` in every pipeline (the preset only injects into pipelines named exactly traces/metrics/logs)
   - the `resource` processor adds `deployment.environment.name=k3d`
-  - exporters `otlp_grpc/alloy`, `otlp_grpc/honeycomb`, and `otlp_grpc/honeycomb-metrics` (Honeycomb needs `x-honeycomb-dataset` for metrics; traces and logs get one dataset per `service.name`)
+  - exporters `otlp_grpc/alloy`, `otlp_grpc/honeycomb`, and `otlp_grpc/honeycomb-metrics` (Honeycomb's docs say metrics need `x-honeycomb-dataset`; in practice this environment puts them in its `metrics` dataset. Traces and logs get one dataset per `service.name`)
   - two metrics pipelines, so `delta_to_cumulative` only runs on the Prometheus path
   - uses the collector's current component names (`otlp_grpc`, `k8s_attributes`, `delta_to_cumulative`), matching what the chart rewrites to
   - config checked with `otelcol-contrib validate`
@@ -263,7 +263,7 @@ One signal at a time, checking Grafana and Honeycomb after each step.
 ### 10a — Traces
 - [x] OTel Go SDK 1.47 (`telemetry.go`): resource from `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` plus SDK and host attributes, an OTLP gRPC trace exporter (endpoint from `OTEL_EXPORTER_OTLP_ENDPOINT`), a batch span processor, and W3C tracecontext + baggage propagators. It's shut down on exit, so buffered spans get flushed
 - [x] `otelhttp` 0.72 wraps the mux and skips `/healthz`. It names spans from the ServeMux pattern (`GET /products/{id}`) and sets `http.route` itself, so no span-name formatter is needed
-- [x] Custom spans: `cache.lookup` (`catalogue.cache.hit`), `store.get`, `store.save` (`catalogue.store.bytes`, records errors), and `warehouse.check` around the simulated slow downstream. The store methods take a `context.Context` so their spans join the request's trace
+- [x] Custom spans: `cache.lookup` (`catalogue.cache.result` = hit/miss, the same key the cache metric uses), `store.get`, `store.save` (`catalogue.store.bytes`, records errors), and `warehouse.check` around the simulated slow downstream. The store methods take a `context.Context` so their spans join the request's trace
 - [x] Attributes on the server spans: `catalogue.product.id`, `catalogue.quantity`, `catalogue.stock.remaining`, `catalogue.products.count`, `catalogue.chaos.delay_ms` (app-prefixed, so they can't clash with semantic conventions)
 - [x] Business outcome vs error: insufficient stock (409) is a span **event**, and the span isn't failed; a chaos 500 is `RecordError` + status `ERROR`
 - [x] Chart: `otel.serviceName`, `otel.endpoint`, `otel.resourceAttributes` values become `OTEL_*` env vars, and `service.version` is set from the image tag
@@ -274,9 +274,20 @@ One signal at a time, checking Grafana and Honeycomb after each step.
   - Tempo's `traces_spanmetrics_calls_total{service="catalogue-api"}` is split per route and status, with no metrics code in the app yet
 
 ### 10b — Metrics
-- [ ] MeterProvider + OTLP gRPC metric exporter; `otelhttp` then also records `http.server.request.duration` etc.
-- [ ] Custom: `catalogue.products.listed` counter, `catalogue.cache.requests{result}` counter, `catalogue.stock.level{product}` observable gauge, `catalogue.reservations{outcome}` counter
-- [ ] Verify in Prometheus/Grafana and the Honeycomb metrics dataset
+- [x] MeterProvider with an OTLP gRPC metric exporter and a periodic reader (`OTEL_METRIC_EXPORT_INTERVAL=15000` from the chart's `otel.metricExportInterval`; the SDK default is 60s). Go uses cumulative temporality, so nothing needs converting
+- [x] Free once a MeterProvider exists: otelhttp's `http.server.request.duration`, `http.server.request.body.size` and `http.server.response.body.size`, by `http.route`/method/status
+- [x] Custom (`metrics.go`):
+  - `catalogue.cache.requests{catalogue.cache.result}` and `catalogue.product.views{catalogue.product.id}` counters
+  - `catalogue.reservations{catalogue.reservation.outcome}` and `catalogue.stock.reserved{catalogue.product.id}` counters
+  - `catalogue.stock.level{catalogue.product.id}`, an **observable gauge** read from the store at each export
+  - `catalogue.warehouse.duration`, a histogram in seconds with explicit buckets, recorded with the span's context so it carries **exemplars**
+  - replaces the plan's `catalogue.products.listed`, since per-product views say more
+- [x] Prometheus names: dots → underscores, counters get `_total`, the unit becomes a suffix (`_seconds`, `_bytes`), and `{annotation}` units are dropped. Attribute keys become labels the same way, e.g. `catalogue_cache_result`
+- [x] Verify:
+  - all metrics are under `job="shop/catalogue-api"`, with promoted resource labels (`k8s_pod_name`, `service_version`, …)
+  - cache hit ratio about 66% over a load run, stock level per product, p95 per route (`/chaos` about 2.3s, `/stock/reserve` about 240ms)
+  - 37 exemplars on the warehouse histogram, each with trace_id/span_id
+  - the collector sent the same number of metric points to Alloy and Honeycomb, with 0 failed
 
 ### 10c — Logs
 - [ ] Bridge `slog` to OTLP with `otelslog` (keeping JSON on stdout too), so log records carry trace_id/span_id

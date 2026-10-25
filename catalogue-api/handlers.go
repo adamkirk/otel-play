@@ -12,24 +12,28 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Attribute keys for this service's spans. Custom attributes get an app
-// prefix so they can't clash with OpenTelemetry's semantic conventions.
+// Attribute keys for this service's spans and metrics. Custom attributes get
+// an app prefix so they can't clash with OpenTelemetry's semantic
+// conventions. Spans and metrics share keys where they describe the same
+// thing, so a column means the same everywhere.
 var (
 	attrProductID     = attribute.Key("catalogue.product.id")
 	attrQuantity      = attribute.Key("catalogue.quantity")
 	attrStockLeft     = attribute.Key("catalogue.stock.remaining")
-	attrCacheHit      = attribute.Key("catalogue.cache.hit")
+	attrCacheResult   = attribute.Key("catalogue.cache.result") // "hit" or "miss"
 	attrProductsCount = attribute.Key("catalogue.products.count")
 	attrChaosDelayMS  = attribute.Key("catalogue.chaos.delay_ms")
 )
 
 type server struct {
-	store  *Store
-	cache  *productCache
-	logger *slog.Logger
+	store   *Store
+	cache   *productCache
+	metrics *metrics
+	logger  *slog.Logger
 }
 
 func (s *server) routes() http.Handler {
@@ -64,6 +68,7 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 
 	p, hit := s.lookupCache(ctx, id)
 	if hit {
+		s.metrics.productViews.Add(ctx, 1, metric.WithAttributes(attrProductID.String(p.ID)))
 		writeJSON(w, http.StatusOK, p)
 		return
 	}
@@ -74,6 +79,7 @@ func (s *server) getProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cache.Set(p)
+	s.metrics.productViews.Add(ctx, 1, metric.WithAttributes(attrProductID.String(p.ID)))
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -84,12 +90,13 @@ func (s *server) lookupCache(ctx context.Context, id string) (Product, bool) {
 	defer span.End()
 
 	p, hit := s.cache.Get(id)
-	span.SetAttributes(attrCacheHit.Bool(hit))
-
 	result := "miss"
 	if hit {
 		result = "hit"
 	}
+
+	span.SetAttributes(attrCacheResult.String(result))
+	s.metrics.recordCacheLookup(ctx, result)
 	s.logger.InfoContext(ctx, "product cache lookup", "product_id", id, "result", result)
 	return p, hit
 }
@@ -120,9 +127,11 @@ func (s *server) reserveStock(w http.ResponseWriter, r *http.Request) {
 	p, err := s.store.Reserve(ctx, req.ProductID, req.Quantity)
 	switch {
 	case errors.Is(err, ErrNotFound):
+		s.metrics.recordReservation(ctx, req.ProductID, "not_found", req.Quantity)
 		writeError(w, http.StatusNotFound, "product not found")
 		return
 	case errors.Is(err, ErrInsufficientStock):
+		s.metrics.recordReservation(ctx, req.ProductID, "insufficient_stock", req.Quantity)
 		// A normal business outcome, not an error: record it as an event
 		// on the span rather than failing it.
 		span.AddEvent("insufficient stock", trace.WithAttributes(attrStockLeft.Int(p.Stock)))
@@ -138,6 +147,7 @@ func (s *server) reserveStock(w http.ResponseWriter, r *http.Request) {
 
 	s.cache.Delete(p.ID)
 	span.SetAttributes(attrStockLeft.Int(p.Stock))
+	s.metrics.recordReservation(ctx, p.ID, "reserved", req.Quantity)
 	s.logger.InfoContext(r.Context(), "stock reserved",
 		"product_id", p.ID, "quantity", req.Quantity, "remaining", p.Stock)
 	writeJSON(w, http.StatusOK, reserveResponse{ProductID: p.ID, Reserved: req.Quantity, Remaining: p.Stock})
@@ -182,10 +192,12 @@ func (s *server) restockStock(w http.ResponseWriter, r *http.Request) {
 // checkWarehouse simulates a slow call to a downstream warehouse system, as
 // its own span so the latency shows up clearly in the trace waterfall.
 func (s *server) checkWarehouse(ctx context.Context) {
-	_, span := tracer.Start(ctx, "warehouse.check")
+	ctx, span := tracer.Start(ctx, "warehouse.check")
 	defer span.End()
 
+	started := time.Now()
 	time.Sleep(time.Duration(20+rand.IntN(180)) * time.Millisecond)
+	s.metrics.recordWarehouseWait(ctx, time.Since(started))
 }
 
 // decodeStockRequest parses and validates a reserve/restock body, writing an

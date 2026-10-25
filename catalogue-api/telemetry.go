@@ -6,8 +6,10 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -25,6 +27,7 @@ var tracer = otel.Tracer("github.com/adamkirk/otel-play/catalogue-api")
 //	OTEL_SERVICE_NAME            catalogue-api
 //	OTEL_EXPORTER_OTLP_ENDPOINT  http://otel-collector.observability.svc:4317
 //	OTEL_RESOURCE_ATTRIBUTES     extra resource attributes, e.g. service.version
+//	OTEL_METRIC_EXPORT_INTERVAL  milliseconds between metric exports
 func setupTelemetry(ctx context.Context) (shutdown func(context.Context) error, err error) {
 	res, err := resource.New(ctx,
 		resource.WithFromEnv(),      // OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES
@@ -45,6 +48,19 @@ func setupTelemetry(ctx context.Context) (shutdown func(context.Context) error, 
 	)
 	otel.SetTracerProvider(tracerProvider)
 
+	// Metrics are exported on a timer (OTEL_METRIC_EXPORT_INTERVAL, 60s by
+	// default). Go's SDK uses cumulative temporality, which is what
+	// Prometheus expects.
+	metricExporter, err := otlpmetricgrpc.New(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create metric exporter: %w", err)
+	}
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithResource(res),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
+	)
+	otel.SetMeterProvider(meterProvider)
+
 	// W3C traceparent/tracestate and baggage, so traces join up with the
 	// services that call us.
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
@@ -53,6 +69,6 @@ func setupTelemetry(ctx context.Context) (shutdown func(context.Context) error, 
 	))
 
 	return func(ctx context.Context) error {
-		return errors.Join(tracerProvider.Shutdown(ctx))
+		return errors.Join(tracerProvider.Shutdown(ctx), meterProvider.Shutdown(ctx))
 	}, nil
 }

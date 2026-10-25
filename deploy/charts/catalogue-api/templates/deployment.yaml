@@ -47,6 +47,8 @@ spec:
               value: {{ .Values.otel.endpoint | quote }}
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: "service.version={{ .Values.image.tag }},{{ .Values.otel.resourceAttributes }}"
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: {{ .Values.otel.metricExportInterval | quote }}
             {{- range $name, $value := .Values.env }}
             - name: {{ $name }}
               value: {{ $value | quote }}

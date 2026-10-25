@@ -43,7 +43,12 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("product store opened", "path", dataPath, "seeded", seeded, "products", len(store.List()))
 
-	srv := &server{store: store, cache: newProductCache(30 * time.Second), logger: logger}
+	m, err := newMetrics(store)
+	if err != nil {
+		return err
+	}
+
+	srv := &server{store: store, cache: newProductCache(30 * time.Second), metrics: m, logger: logger}
 	httpServer := &http.Server{
 		Addr:              addr,
 		Handler:           srv.routes(),
