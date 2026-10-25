@@ -24,6 +24,19 @@ func run(logger *slog.Logger) error {
 	addr := ":" + env("PORT", "8080")
 	dataPath := env("DATA_PATH", "/data/products.json")
 
+	shutdownTelemetry, err := setupTelemetry(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Flush any spans still buffered in the batcher before exiting.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			logger.Error("telemetry shutdown failed", "error", err)
+		}
+	}()
+
 	store, seeded, err := OpenStore(dataPath)
 	if err != nil {
 		return err

@@ -7,6 +7,14 @@ image:
 port: 8080
 logLevel: info
 
+# OpenTelemetry SDK settings, passed as the standard OTEL_* env vars.
+otel:
+  serviceName: catalogue-api
+  # The in-cluster OTel Collector (OTLP gRPC).
+  endpoint: http://otel-collector.observability.svc:4317
+  # Extra resource attributes, as OTEL_RESOURCE_ATTRIBUTES.
+  resourceAttributes: service.namespace=shop
+
 # Extra environment variables, as a name -> value map.
 env: {}
 

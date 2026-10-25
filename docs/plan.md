@@ -258,10 +258,29 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 - App endpoint for Part 2: `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability.svc:4317` (gRPC) or `:4318` (HTTP)
 
 ## Stage 10 — Instrument catalogue-api
-- [ ] OTel SDK setup: resource, OTLP gRPC exporters for traces and metrics, wrap the mux with `otelhttp`
-- [ ] Custom spans and metrics from the table, including a span around file reads and writes
-- [ ] Add `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` to the chart values
-- [ ] Verify: curl the endpoints, see spans and metrics in Grafana and Honeycomb
+One signal at a time, checking Grafana and Honeycomb after each step.
+
+### 10a — Traces
+- [x] OTel Go SDK 1.47 (`telemetry.go`): resource from `OTEL_SERVICE_NAME`/`OTEL_RESOURCE_ATTRIBUTES` plus SDK and host attributes, an OTLP gRPC trace exporter (endpoint from `OTEL_EXPORTER_OTLP_ENDPOINT`), a batch span processor, and W3C tracecontext + baggage propagators. It's shut down on exit, so buffered spans get flushed
+- [x] `otelhttp` 0.72 wraps the mux and skips `/healthz`. It names spans from the ServeMux pattern (`GET /products/{id}`) and sets `http.route` itself, so no span-name formatter is needed
+- [x] Custom spans: `cache.lookup` (`catalogue.cache.hit`), `store.get`, `store.save` (`catalogue.store.bytes`, records errors), and `warehouse.check` around the simulated slow downstream. The store methods take a `context.Context` so their spans join the request's trace
+- [x] Attributes on the server spans: `catalogue.product.id`, `catalogue.quantity`, `catalogue.stock.remaining`, `catalogue.products.count`, `catalogue.chaos.delay_ms` (app-prefixed, so they can't clash with semantic conventions)
+- [x] Business outcome vs error: insufficient stock (409) is a span **event**, and the span isn't failed; a chaos 500 is `RecordError` + status `ERROR`
+- [x] Chart: `otel.serviceName`, `otel.endpoint`, `otel.resourceAttributes` values become `OTEL_*` env vars, and `service.version` is set from the image tag
+- [x] Verify:
+  - traces in Tempo and Honeycomb named by route
+  - span trees: cache hit → 1 child, miss → `cache.lookup` + `store.get`, reserve → `warehouse.check` + `store.save`
+  - resource attributes include `service.namespace=shop` (the app's value wins over k8s_attributes) and the pod/deployment
+  - Tempo's `traces_spanmetrics_calls_total{service="catalogue-api"}` is split per route and status, with no metrics code in the app yet
+
+### 10b — Metrics
+- [ ] MeterProvider + OTLP gRPC metric exporter; `otelhttp` then also records `http.server.request.duration` etc.
+- [ ] Custom: `catalogue.products.listed` counter, `catalogue.cache.requests{result}` counter, `catalogue.stock.level{product}` observable gauge, `catalogue.reservations{outcome}` counter
+- [ ] Verify in Prometheus/Grafana and the Honeycomb metrics dataset
+
+### 10c — Logs
+- [ ] Bridge `slog` to OTLP with `otelslog` (keeping JSON on stdout too), so log records carry trace_id/span_id
+- [ ] Verify: Loki logs link to Tempo traces, and Honeycomb shows logs alongside the trace
 
 ## Stage 11 — Instrument orders-api + worker
 - [ ] Add the `opentelemetry` extension to the Dockerfile (`install-php-extensions opentelemetry`) and `OTEL_PHP_AUTOLOAD_ENABLED=true`
@@ -283,8 +302,7 @@ The **Telemetry** columns describe what gets added in Part 2. In Part 1, each en
 - [ ] Verify: one checkout click produces one trace through browser → orders-api → catalogue-api → worker
 
 ## Stage 13 — Logs over OTLP
-- [ ] Switch the existing stdout logs to also go over OTLP with trace_id/span_id:
-  - Go: `otelslog` bridge
+- [ ] Switch the existing stdout logs to also go over OTLP with trace_id/span_id (catalogue-api is done in 10c):
   - Laravel: `open-telemetry/opentelemetry-logger-monolog` handler
   - Node and browser: LoggerProvider
 - [ ] Verify: logs show in Loki with trace IDs, the Grafana trace→logs link works, and logs show in Honeycomb

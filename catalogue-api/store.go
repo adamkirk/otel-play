@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 //go:embed seed.json
@@ -52,7 +56,7 @@ func OpenStore(path string) (*Store, bool, error) {
 	}
 
 	if seeded {
-		if err := s.save(); err != nil {
+		if err := s.save(context.Background()); err != nil {
 			return nil, false, err
 		}
 	}
@@ -69,7 +73,10 @@ func (s *Store) List() []Product {
 	return out
 }
 
-func (s *Store) Get(id string) (Product, error) {
+func (s *Store) Get(ctx context.Context, id string) (Product, error) {
+	_, span := tracer.Start(ctx, "store.get")
+	defer span.End()
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -83,7 +90,7 @@ func (s *Store) Get(id string) (Product, error) {
 
 // Reserve decrements stock for a product and persists the change. It returns
 // the updated product.
-func (s *Store) Reserve(id string, qty int) (Product, error) {
+func (s *Store) Reserve(ctx context.Context, id string, qty int) (Product, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -97,7 +104,7 @@ func (s *Store) Reserve(id string, qty int) (Product, error) {
 		}
 
 		p.Stock -= qty
-		if err := s.save(); err != nil {
+		if err := s.save(ctx); err != nil {
 			p.Stock += qty
 			return *p, err
 		}
@@ -108,7 +115,7 @@ func (s *Store) Reserve(id string, qty int) (Product, error) {
 
 // Restock adds stock to a product and persists the change. It returns the
 // updated product.
-func (s *Store) Restock(id string, qty int) (Product, error) {
+func (s *Store) Restock(ctx context.Context, id string, qty int) (Product, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -119,7 +126,7 @@ func (s *Store) Restock(id string, qty int) (Product, error) {
 		}
 
 		p.Stock += qty
-		if err := s.save(); err != nil {
+		if err := s.save(ctx); err != nil {
 			p.Stock -= qty
 			return *p, err
 		}
@@ -128,15 +135,29 @@ func (s *Store) Restock(id string, qty int) (Product, error) {
 	return Product{}, ErrNotFound
 }
 
-// save writes to a temp file and renames it over the real one, so a crash
-// mid-write never leaves a truncated file. Callers must hold the lock (or be
-// in OpenStore before the store is shared).
-func (s *Store) save() error {
+// save persists the products to disk. Callers must hold the lock (or be in
+// OpenStore before the store is shared).
+func (s *Store) save(ctx context.Context) (err error) {
+	_, span := tracer.Start(ctx, "store.save")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "save failed")
+		}
+		span.End()
+	}()
+
 	data, err := json.MarshalIndent(s.products, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode products: %w", err)
 	}
+	span.SetAttributes(attribute.Int("catalogue.store.bytes", len(data)))
+	return s.write(data)
+}
 
+// write writes to a temp file and renames it over the real one, so a crash
+// mid-write never leaves a truncated file.
+func (s *Store) write(data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
